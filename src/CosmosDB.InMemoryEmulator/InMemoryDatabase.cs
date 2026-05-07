@@ -89,6 +89,18 @@ internal class InMemoryDatabase : Database
     {
         var created = false;
         var container = _containers.GetOrAdd(id, name => { created = true; return new InMemoryContainer(name, partitionKeyPath); });
+        // If the container was lazily created by GetContainer() with a default PK path,
+        // replace it with one that has the correct partition key path.
+        if (!created && !container.ExplicitlyCreated)
+        {
+            var replacement = new InMemoryContainer(id, partitionKeyPath);
+            replacement.OnDeleted = () => _containers.TryRemove(id, out _);
+            replacement.SetParentDatabase(Id);
+            replacement.ExplicitlyCreated = true;
+            _containers[id] = replacement;
+            container = replacement;
+            created = true;
+        }
         container.OnDeleted ??= () => _containers.TryRemove(id, out _);
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
@@ -106,6 +118,21 @@ internal class InMemoryDatabase : Database
             containerProperties.PartitionKeyPath = "/id";
         var created = false;
         var container = _containers.GetOrAdd(id, _ => { created = true; return new InMemoryContainer(containerProperties); });
+        // If the container was lazily created by GetContainer() with a default PK path,
+        // replace it with one that has the correct properties.
+        if (!created && !container.ExplicitlyCreated)
+        {
+            var replacement = new InMemoryContainer(containerProperties);
+            replacement.OnDeleted = () => _containers.TryRemove(id, out _);
+            replacement.SetParentDatabase(Id);
+            replacement.ExplicitlyCreated = true;
+            replacement.DefaultTimeToLive = containerProperties.DefaultTimeToLive;
+            if (containerProperties.IndexingPolicy is not null)
+                replacement.IndexingPolicy = containerProperties.IndexingPolicy;
+            _containers[id] = replacement;
+            container = replacement;
+            created = true;
+        }
         container.OnDeleted ??= () => _containers.TryRemove(id, out _);
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
@@ -143,7 +170,16 @@ internal class InMemoryDatabase : Database
         container.ExplicitlyCreated = true;
         if (!_containers.TryAdd(id, container))
         {
-            throw InMemoryCosmosException.Create("Container already exists.", HttpStatusCode.Conflict, 0, string.Empty, 0);
+            // If the existing container was lazily created by GetContainer(), replace it.
+            // Real Cosmos DB: GetContainer() returns a lightweight proxy that doesn't create anything.
+            if (_containers.TryGetValue(id, out var existing) && !existing.ExplicitlyCreated)
+            {
+                _containers[id] = container;
+            }
+            else
+            {
+                throw InMemoryCosmosException.Create("Container already exists.", HttpStatusCode.Conflict, 0, string.Empty, 0);
+            }
         }
         _explicitlyCreatedContainers.TryAdd(id, true);
         var response = BuildContainerResponse(container, partitionKeyPath, HttpStatusCode.Created);
@@ -167,7 +203,15 @@ internal class InMemoryDatabase : Database
             container.IndexingPolicy = containerProperties.IndexingPolicy;
         if (!_containers.TryAdd(id, container))
         {
-            throw InMemoryCosmosException.Create("Container already exists.", HttpStatusCode.Conflict, 0, string.Empty, 0);
+            // If the existing container was lazily created by GetContainer(), replace it.
+            if (_containers.TryGetValue(id, out var existing) && !existing.ExplicitlyCreated)
+            {
+                _containers[id] = container;
+            }
+            else
+            {
+                throw InMemoryCosmosException.Create("Container already exists.", HttpStatusCode.Conflict, 0, string.Empty, 0);
+            }
         }
         _explicitlyCreatedContainers.TryAdd(id, true);
         var response = BuildContainerResponse(container, containerProperties, HttpStatusCode.Created);
@@ -199,7 +243,14 @@ internal class InMemoryDatabase : Database
             container.IndexingPolicy = containerProperties.IndexingPolicy;
         if (!_containers.TryAdd(id, container))
         {
-            return Task.FromResult(CreateStreamResponse(HttpStatusCode.Conflict));
+            if (_containers.TryGetValue(id, out var existing) && !existing.ExplicitlyCreated)
+            {
+                _containers[id] = container;
+            }
+            else
+            {
+                return Task.FromResult(CreateStreamResponse(HttpStatusCode.Conflict));
+            }
         }
         _explicitlyCreatedContainers.TryAdd(id, true);
         return Task.FromResult(CreateStreamResponse(HttpStatusCode.Created));
