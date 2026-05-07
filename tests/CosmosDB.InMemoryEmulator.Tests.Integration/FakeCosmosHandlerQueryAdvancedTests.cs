@@ -927,4 +927,47 @@ public class FakeCosmosHandlerQueryAdvancedTests(EmulatorSession session) : IAsy
         results.Should().HaveCount(1);
         results[0].Name.Should().Be("hello-world");
     }
+
+    // Issue #16: SELECT VALUE projecting scalar strings should be deserialized correctly
+    [Fact]
+    public async Task Query_SelectValueScalarString_Works()
+    {
+        var doc = new TestDocument { Id = "sv1", PartitionKey = "pk1", Name = "Widget" };
+        await _container.CreateItemAsync(doc, new PartitionKey("pk1"));
+
+        var query = new QueryDefinition("SELECT VALUE c.name FROM c WHERE c.id = 'sv1'");
+        var results = new List<string>();
+        using var iterator = _container.GetItemQueryIterator<string>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("pk1") });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            results.AddRange(page);
+        }
+
+        results.Should().HaveCount(1);
+        results[0].Should().Be("Widget");
+    }
+
+    // Issue #16: SELECT VALUE projecting scalar int should be deserialized correctly
+    [Fact]
+    public async Task Query_SelectValueScalarInt_Works()
+    {
+        // Use a JObject to have a custom integer property (avoiding 'value' which is a Cosmos SQL reserved word)
+        var doc = JObject.FromObject(new { id = "sv2", partitionKey = "pk1", amount = 42 });
+        await _container.CreateItemAsync(doc, new PartitionKey("pk1"));
+
+        var query = new QueryDefinition("SELECT VALUE c.amount FROM c WHERE c.id = 'sv2'");
+        var results = new List<int>();
+        using var iterator = _container.GetItemQueryIterator<int>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("pk1") });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            results.AddRange(page);
+        }
+
+        results.Should().HaveCount(1);
+        results[0].Should().Be(42);
+    }
 }

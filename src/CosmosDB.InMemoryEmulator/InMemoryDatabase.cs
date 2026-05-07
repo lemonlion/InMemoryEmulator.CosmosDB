@@ -3,6 +3,7 @@
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.Cosmos;
@@ -104,6 +105,8 @@ internal class InMemoryDatabase : Database
         container.OnDeleted ??= () => _containers.TryRemove(id, out _);
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
+        if (throughput.HasValue)
+            container._throughput = throughput.Value;
         _explicitlyCreatedContainers.TryAdd(id, true);
         var response = BuildContainerResponse(container, partitionKeyPath, created ? HttpStatusCode.Created : HttpStatusCode.OK);
         return Task.FromResult(response);
@@ -136,6 +139,8 @@ internal class InMemoryDatabase : Database
         container.OnDeleted ??= () => _containers.TryRemove(id, out _);
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
+        if (throughput.HasValue)
+            container._throughput = throughput.Value;
         _explicitlyCreatedContainers.TryAdd(id, true);
         if (created)
         {
@@ -151,7 +156,7 @@ internal class InMemoryDatabase : Database
         ContainerProperties containerProperties, ThroughputProperties throughputProperties,
         RequestOptions requestOptions = null, CancellationToken cancellationToken = default)
     {
-        return CreateContainerIfNotExistsAsync(containerProperties, (int?)null, requestOptions, cancellationToken);
+        return CreateContainerIfNotExistsAsync(containerProperties, throughputProperties?.Throughput, requestOptions, cancellationToken);
     }
 
     // ── CreateContainerAsync ────────────────────────────────────────────────
@@ -168,6 +173,8 @@ internal class InMemoryDatabase : Database
         container.OnDeleted = () => _containers.TryRemove(id, out _);
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
+        if (throughput.HasValue)
+            container._throughput = throughput.Value;
         if (!_containers.TryAdd(id, container))
         {
             // If the existing container was lazily created by GetContainer(), replace it.
@@ -199,6 +206,8 @@ internal class InMemoryDatabase : Database
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
         container.DefaultTimeToLive = containerProperties.DefaultTimeToLive;
+        if (throughput.HasValue)
+            container._throughput = throughput.Value;
         if (containerProperties.IndexingPolicy is not null)
             container.IndexingPolicy = containerProperties.IndexingPolicy;
         if (!_containers.TryAdd(id, container))
@@ -222,7 +231,9 @@ internal class InMemoryDatabase : Database
         ContainerProperties containerProperties, ThroughputProperties throughputProperties,
         RequestOptions requestOptions = null, CancellationToken cancellationToken = default)
     {
-        return CreateContainerAsync(containerProperties, (int?)null, requestOptions, cancellationToken);
+        // Ref: https://learn.microsoft.com/en-us/rest/api/cosmos-db/create-a-collection
+        //   Throughput can be specified via ThroughputProperties; extract the value.
+        return CreateContainerAsync(containerProperties, throughputProperties?.Throughput, requestOptions, cancellationToken);
     }
 
     // ── CreateContainerStreamAsync ──────────────────────────────────────────
@@ -239,6 +250,8 @@ internal class InMemoryDatabase : Database
         container.SetParentDatabase(Id);
         container.ExplicitlyCreated = true;
         container.DefaultTimeToLive = containerProperties.DefaultTimeToLive;
+        if (throughput.HasValue)
+            container._throughput = throughput.Value;
         if (containerProperties.IndexingPolicy is not null)
             container.IndexingPolicy = containerProperties.IndexingPolicy;
         if (!_containers.TryAdd(id, container))
@@ -260,7 +273,7 @@ internal class InMemoryDatabase : Database
         ContainerProperties containerProperties, ThroughputProperties throughputProperties,
         RequestOptions requestOptions = null, CancellationToken cancellationToken = default)
     {
-        return CreateContainerStreamAsync(containerProperties, (int?)null, requestOptions, cancellationToken);
+        return CreateContainerStreamAsync(containerProperties, throughputProperties?.Throughput, requestOptions, cancellationToken);
     }
 
     // ── GetContainer ────────────────────────────────────────────────────────
@@ -289,7 +302,24 @@ internal class InMemoryDatabase : Database
         var idFilter = InMemoryCosmosClient.ExtractIdFilter(queryText);
         if (idFilter is not null)
             items = items.Where(cp => string.Equals(cp.Id, idFilter, StringComparison.Ordinal));
+
+        // Ref: https://learn.microsoft.com/en-us/rest/api/cosmos-db/list-collections
+        //   SELECT VALUE queries project scalar values (e.g. container IDs as strings).
+        if (typeof(T) != typeof(ContainerProperties) && IsSelectValueIdQuery(queryText))
+        {
+            var ids = items.Select(cp => (T)(object)cp.Id).ToList();
+            return new InMemoryFeedIterator<T>(ids, requestOptions?.MaxItemCount, offset);
+        }
+
         return new InMemoryFeedIterator<T>(items.Select(cp => (T)(object)cp).ToList(), requestOptions?.MaxItemCount, offset);
+    }
+
+    private static bool IsSelectValueIdQuery(string queryText)
+    {
+        if (string.IsNullOrWhiteSpace(queryText))
+            return false;
+        // Matches patterns like: SELECT VALUE c.id, SELECT VALUE(c.id), SELECT VALUE c["id"]
+        return Regex.IsMatch(queryText, @"SELECT\s+VALUE\s*\(?.*\.id\)?", RegexOptions.IgnoreCase);
     }
 
     public override FeedIterator<T> GetContainerQueryIterator<T>(

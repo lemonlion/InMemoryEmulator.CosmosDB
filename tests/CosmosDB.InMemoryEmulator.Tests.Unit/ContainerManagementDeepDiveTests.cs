@@ -260,6 +260,47 @@ public class ContainerExplicitCreationLifecycleTests
 
 public class ThroughputPersistenceDeepDiveTests
 {
+    // Issue #26: CreateContainerAsync throughput parameter should be persisted
+    [Fact]
+    public async Task CreateContainer_WithThroughput_PersistsValue()
+    {
+        var client = new InMemoryCosmosClient();
+        var db = (await client.CreateDatabaseIfNotExistsAsync("testdb")).Database;
+
+        var containerProps = new ContainerProperties("items", "/pk");
+        await db.CreateContainerAsync(containerProps, throughput: 2000);
+
+        var actualThroughput = await client.GetContainer("testdb", "items").ReadThroughputAsync();
+        actualThroughput.Should().Be(2000);
+    }
+
+    // Issue #26: CreateContainerIfNotExistsAsync throughput parameter should be persisted
+    [Fact]
+    public async Task CreateContainerIfNotExists_WithThroughput_PersistsValue()
+    {
+        var client = new InMemoryCosmosClient();
+        var db = (await client.CreateDatabaseIfNotExistsAsync("testdb")).Database;
+
+        await db.CreateContainerIfNotExistsAsync("items", "/pk", throughput: 1500);
+
+        var actualThroughput = await client.GetContainer("testdb", "items").ReadThroughputAsync();
+        actualThroughput.Should().Be(1500);
+    }
+
+    // Issue #26: CreateContainerAsync with ThroughputProperties should persist
+    [Fact]
+    public async Task CreateContainer_WithThroughputProperties_PersistsValue()
+    {
+        var client = new InMemoryCosmosClient();
+        var db = (await client.CreateDatabaseIfNotExistsAsync("testdb")).Database;
+
+        var containerProps = new ContainerProperties("items", "/pk");
+        await db.CreateContainerAsync(containerProps, ThroughputProperties.CreateManualThroughput(3000));
+
+        var actualThroughput = await client.GetContainer("testdb", "items").ReadThroughputAsync();
+        actualThroughput.Should().Be(3000);
+    }
+
     // T09: BUG-6 — ReplaceThroughputAsync(ThroughputProperties) should persist the value
     [Fact]
     public async Task ReplaceThroughput_ThroughputProperties_PersistsValue()
@@ -514,6 +555,36 @@ public class ContainerQueryFilterTests
 
         returned.Id.Should().Be("mycontainer");
         returned.PartitionKeyPath.Should().Be("/pk");
+    }
+
+    // Issue #7: GetContainerQueryIterator<string> with SELECT VALUE query should project container IDs
+    [Fact]
+    public async Task GetContainerQueryIterator_SelectValueId_ReturnsContainerIds()
+    {
+        var db = new InMemoryDatabase("testdb");
+        await db.CreateContainerAsync(new ContainerProperties("container-a", "/pk"));
+        await db.CreateContainerAsync(new ContainerProperties("container-b", "/pk"));
+
+        var iterator = db.GetContainerQueryIterator<string>("SELECT VALUE(c.id) FROM c");
+        var page = await iterator.ReadNextAsync();
+        var ids = page.ToList();
+
+        ids.Should().Contain("container-a");
+        ids.Should().Contain("container-b");
+    }
+
+    // Issue #7: Alternative SELECT VALUE syntax without parentheses
+    [Fact]
+    public async Task GetContainerQueryIterator_SelectValueIdNoParen_ReturnsContainerIds()
+    {
+        var db = new InMemoryDatabase("testdb");
+        await db.CreateContainerAsync(new ContainerProperties("my-container", "/pk"));
+
+        var iterator = db.GetContainerQueryIterator<string>("SELECT VALUE c.id FROM c");
+        var page = await iterator.ReadNextAsync();
+        var ids = page.ToList();
+
+        ids.Should().Contain("my-container");
     }
 }
 

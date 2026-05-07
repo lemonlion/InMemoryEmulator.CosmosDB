@@ -81,7 +81,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     private readonly object _uniqueKeyWriteLock = new();
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), SemaphoreSlim> _itemLocks = new();
     private static readonly AsyncLocal<HashSet<(string Id, string PartitionKey)>> BatchWriteTracker = new();
-    private int _throughput = 400;
+    internal int _throughput = 400;
     internal bool _isDeleted;
 
     private bool HasUniqueKeys =>

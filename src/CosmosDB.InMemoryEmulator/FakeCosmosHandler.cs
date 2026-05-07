@@ -509,6 +509,13 @@ public class FakeCosmosHandler : HttpMessageHandler
             return await HandleReadFeedAsync(request, cancellationToken);
         }
 
+        // Ref: https://learn.microsoft.com/en-us/rest/api/cosmos-db/querying-offers
+        //   ReadThroughputAsync queries the /offers endpoint to retrieve provisioned throughput.
+        if (path.Contains("/offers"))
+        {
+            return HandleOffersRequest(request);
+        }
+
         return new HttpResponseMessage(HttpStatusCode.NotFound)
         {
             Content = new StringContent(
@@ -1072,6 +1079,44 @@ public class FakeCosmosHandler : HttpMessageHandler
         }
 
         return (operations, condition);
+    }
+
+    private HttpResponseMessage HandleOffersRequest(HttpRequestMessage request)
+    {
+        // Ref: https://learn.microsoft.com/en-us/rest/api/cosmos-db/querying-offers
+        //   The SDK queries /offers to read provisioned throughput for a container.
+        //   We return a single offer matching this container's throughput.
+        var offer = new JObject
+        {
+            ["offerVersion"] = "V2",
+            ["offerType"] = "Invalid",
+            ["content"] = new JObject
+            {
+                ["offerThroughput"] = _container._throughput,
+                ["offerIsRUPerMinuteThroughputEnabled"] = false
+            },
+            ["offerResourceId"] = _collectionRid,
+            ["id"] = "offer-" + _collectionRid,
+            ["_rid"] = "offer-" + _collectionRid,
+            ["_self"] = "offers/offer-" + _collectionRid + "/",
+            ["_etag"] = $"\"{Guid.NewGuid()}\"",
+            ["_ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        };
+
+        var wrapper = new JObject
+        {
+            ["_rid"] = "",
+            ["Offers"] = new JArray(offer),
+            ["_count"] = 1
+        };
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(wrapper.ToString(Formatting.None), Encoding.UTF8, "application/json")
+        };
+        response.Headers.Add("x-ms-request-charge", "1");
+        response.Headers.Add("x-ms-activity-id", Guid.NewGuid().ToString());
+        return response;
     }
 
     private HttpResponseMessage HandlePartitionKeyRanges(HttpRequestMessage request)
@@ -2880,6 +2925,15 @@ public class FakeCosmosHandler : HttpMessageHandler
 
             // Create the new container
             var newContainer = new InMemoryContainer(containerProps);
+
+            // Ref: https://learn.microsoft.com/en-us/rest/api/cosmos-db/create-a-collection
+            //   "x-ms-offer-throughput: The user specified throughput for the collection"
+            if (request.Headers.TryGetValues("x-ms-offer-throughput", out var throughputValues) &&
+                int.TryParse(throughputValues.FirstOrDefault(), out var throughputValue))
+            {
+                newContainer._throughput = throughputValue;
+            }
+
             var newHandler = new FakeCosmosHandler(newContainer);
 
             _registry.Handlers[registryKey] = newHandler;

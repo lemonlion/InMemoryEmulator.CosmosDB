@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.14] - 2026-05-07
+
+### Fixed
+- Container throughput specified via `CreateContainerAsync(props, throughput: N)` is now persisted and returned by `ReadThroughputAsync()` (Issue #26). Previously the throughput parameter was silently ignored and the default 400 RU/s was always returned. Also fixed for `CreateContainerIfNotExistsAsync`, `CreateContainerStreamAsync`, and `ThroughputProperties` overloads.
+- `FakeCosmosHandler` now reads the `x-ms-offer-throughput` header during container creation and persists it. Also handles the `/offers` query endpoint so `ReadThroughputAsync` works through the SDK HTTP pipeline.
+- `GetContainerQueryIterator<string>` with `SELECT VALUE(c.id)` queries no longer throws `InvalidCastException` (Issue #7). The method now detects `SELECT VALUE` id projections and returns container IDs as strings instead of always casting `ContainerProperties` to `T`.
+
 ## [4.0.13] - 2026-05-07
 
 ### Fixed
