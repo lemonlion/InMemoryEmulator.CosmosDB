@@ -236,9 +236,11 @@ public static class CosmosSqlTokenizer
          ).OptionalOrDefault()
          select Unit.Value);
 
+    // Ref: EF Core Cosmos provider uses $type as a discriminator column.
+    //   Allow $ as a valid identifier character to support queries like c.$type.
     private static readonly TextParser<Unit> IdentOrKeyword =
-        from first in Character.Letter.Or(Character.EqualTo('_'))
-        from rest in Character.LetterOrDigit.Or(Character.EqualTo('_')).Many()
+        from first in Character.Letter.Or(Character.EqualTo('_')).Or(Character.EqualTo('$'))
+        from rest in Character.LetterOrDigit.Or(Character.EqualTo('_')).Or(Character.EqualTo('$')).Many()
         select Unit.Value;
 
     // Quoted identifiers like [My Column] are not used by the Cosmos SDK's LINQ provider

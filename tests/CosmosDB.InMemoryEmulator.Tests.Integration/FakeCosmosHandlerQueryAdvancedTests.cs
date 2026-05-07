@@ -822,4 +822,61 @@ public class FakeCosmosHandlerQueryAdvancedTests(EmulatorSession session) : IAsy
         results.Should().HaveCount(1);
         results[0]["isValid"]!.Value<bool>().Should().BeTrue();
     }
+
+    [Fact]
+    public async Task Query_DollarPrefixedProperty_Works()
+    {
+        // Issue #35: EF Core Cosmos generates queries using c.$type as a discriminator column.
+        // The parser must accept $-prefixed property names.
+        var doc = JObject.FromObject(new
+        {
+            id = "dollar-1",
+            partitionKey = "pk1",
+            // $type is the discriminator column used by EF Core Cosmos
+        });
+        doc["$type"] = "IdentityUser";
+        await _container.UpsertItemAsync(doc, new PartitionKey("pk1"));
+
+        var query = new QueryDefinition("SELECT VALUE c FROM c WHERE c[\"$type\"] = @type")
+            .WithParameter("@type", "IdentityUser");
+
+        var results = new List<JObject>();
+        using var iterator = _container.GetItemQueryIterator<JObject>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("pk1") });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            results.AddRange(page);
+        }
+
+        results.Should().HaveCount(1);
+        results[0]["$type"]!.Value<string>().Should().Be("IdentityUser");
+    }
+
+    [Fact]
+    public async Task Query_DollarPrefixedProperty_DotNotation_Works()
+    {
+        // Issue #35: Verify c.$type dot notation works (not just bracket notation)
+        var doc = JObject.FromObject(new
+        {
+            id = "dollar-2",
+            partitionKey = "pk1",
+        });
+        doc["$type"] = "IdentityRole";
+        await _container.UpsertItemAsync(doc, new PartitionKey("pk1"));
+
+        var query = new QueryDefinition("SELECT c.id, c[\"$type\"] AS dtype FROM c WHERE c[\"$type\"] = 'IdentityRole'");
+
+        var results = new List<JObject>();
+        using var iterator = _container.GetItemQueryIterator<JObject>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("pk1") });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            results.AddRange(page);
+        }
+
+        results.Should().HaveCount(1);
+        results[0]["dtype"]!.Value<string>().Should().Be("IdentityRole");
+    }
 }
