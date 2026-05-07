@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.13] - 2026-05-07
+
+### Fixed
+- Nested function calls in SQL queries (e.g. `CONTAINS(LOWER(c.name), @val)`) now evaluate correctly (Issue #11). Two root causes fixed: (1) the parser now routes expressions with nested function call arguments through the `SqlExpressionCondition` evaluation path instead of the legacy `FunctionCondition` path that stringifies arguments, and (2) parameter values backed by `JToken`/`JValue` (from HTTP body parsing) are now unwrapped to their primitive .NET types before function evaluation.
+
 ## [4.0.12] - 2026-05-07
 
 ### Fixed

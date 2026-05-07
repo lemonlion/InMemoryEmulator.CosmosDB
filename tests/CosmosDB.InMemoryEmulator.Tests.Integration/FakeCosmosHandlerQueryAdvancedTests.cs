@@ -879,4 +879,52 @@ public class FakeCosmosHandlerQueryAdvancedTests(EmulatorSession session) : IAsy
         results.Should().HaveCount(1);
         results[0]["dtype"]!.Value<string>().Should().Be("IdentityRole");
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Nested Function Calls (Issue #11)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task Query_ContainsLower_NestedFunctionCall_Works()
+    {
+        // Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/query/contains
+        // Nested function calls like CONTAINS(LOWER(c.field), @value) should be evaluated correctly.
+        var doc = new TestDocument { Id = "nf1", PartitionKey = "pk1", Name = "T1000" };
+        await _container.CreateItemAsync(doc, new PartitionKey("pk1"));
+
+        var query = new QueryDefinition("SELECT * FROM c WHERE CONTAINS(LOWER(c.name), @val)")
+            .WithParameter("@val", "t1000");
+        var results = new List<TestDocument>();
+        using var iterator = _container.GetItemQueryIterator<TestDocument>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("pk1") });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            results.AddRange(page);
+        }
+
+        results.Should().HaveCount(1, "CONTAINS(LOWER(c.name), 't1000') should match document with Name='T1000'");
+        results[0].Name.Should().Be("T1000");
+    }
+
+    [Fact]
+    public async Task Query_StartsWithUpper_NestedFunctionCall_Works()
+    {
+        var doc = new TestDocument { Id = "nf2", PartitionKey = "pk1", Name = "hello-world" };
+        await _container.CreateItemAsync(doc, new PartitionKey("pk1"));
+
+        var query = new QueryDefinition("SELECT * FROM c WHERE STARTSWITH(UPPER(c.name), @val)")
+            .WithParameter("@val", "HELLO");
+        var results = new List<TestDocument>();
+        using var iterator = _container.GetItemQueryIterator<TestDocument>(query,
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("pk1") });
+        while (iterator.HasMoreResults)
+        {
+            var page = await iterator.ReadNextAsync();
+            results.AddRange(page);
+        }
+
+        results.Should().HaveCount(1);
+        results[0].Name.Should().Be("hello-world");
+    }
 }

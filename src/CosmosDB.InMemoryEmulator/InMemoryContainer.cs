@@ -6175,7 +6175,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         {
             LiteralExpression lit => lit.Value,
             IdentifierExpression ident => ResolveValue(ident.Name, item, fromAlias, parameters),
-            ParameterExpression param => parameters.TryGetValue(param.Name, out var v) ? v : null,
+            ParameterExpression param => parameters.TryGetValue(param.Name, out var v) ? UnwrapJToken(v) : null,
             FunctionCallExpression func => EvaluateSqlFunction(func, item, fromAlias, parameters),
             BinaryExpression bin => EvaluateBinaryExpression(bin, item, fromAlias, parameters),
             UnaryExpression unary => EvaluateUnaryExpression(unary, item, fromAlias, parameters),
@@ -6199,6 +6199,23 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             SubqueryExpression sub => EvaluateSubquery(sub.Subquery, item, fromAlias, parameters),
             _ => null
         };
+    }
+
+    private static object UnwrapJToken(object value)
+    {
+        if (value is JValue jv)
+        {
+            return jv.Type switch
+            {
+                JTokenType.String => jv.Value<string>(),
+                JTokenType.Integer => jv.Value<long>(),
+                JTokenType.Float => jv.Value<double>(),
+                JTokenType.Boolean => jv.Value<bool>(),
+                JTokenType.Null => null,
+                _ => value
+            };
+        }
+        return value;
     }
 
     private static object EvalBetween(BetweenExpression b, JObject item, string fromAlias, IDictionary<string, object> parameters)

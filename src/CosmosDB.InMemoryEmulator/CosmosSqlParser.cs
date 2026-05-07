@@ -965,7 +965,7 @@ public static class CosmosSqlParser
                     return new SqlExpressionCondition(func);
                 }
 
-                var hasComplexArgs = func.Arguments.Any(a => a is ObjectLiteralExpression or ArrayLiteralExpression);
+                var hasComplexArgs = func.Arguments.Any(a => a is ObjectLiteralExpression or ArrayLiteralExpression or FunctionCallExpression);
                 if (hasComplexArgs)
                 {
                     return new SqlExpressionCondition(func);
