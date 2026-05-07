@@ -883,4 +883,75 @@ public class FakeCosmosHandlerCrudHardeningTests(EmulatorSession session) : IAsy
             response.StatusCode.Should().Be(HttpStatusCode.Created);
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  Phase 10: Unique Key Policy – Nested Paths (UK1–UK3)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task Handler_UniqueKeyPolicy_NestedPath_EnforcesConstraint()
+    {
+        // Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/unique-keys
+        //   "You can specify unique key paths with up to 16 path values."
+        //   Paths like /address/zipCode are supported and reference nested properties.
+        var container = await _fixture.CreateContainerAsync("uk-nested", "/partitionKey", props =>
+        {
+            props.UniqueKeyPolicy = new UniqueKeyPolicy
+            {
+                UniqueKeys = { new UniqueKey { Paths = { "/nested/description" } } }
+            };
+        });
+
+        var doc1 = new TestDocument { Id = "uk1", PartitionKey = "pk1", Name = "A", Nested = new NestedObject { Description = "unique-val", Score = 1.0 } };
+        var doc2 = new TestDocument { Id = "uk2", PartitionKey = "pk1", Name = "B", Nested = new NestedObject { Description = "unique-val", Score = 2.0 } };
+
+        await container.CreateItemAsync(doc1, new PartitionKey("pk1"));
+
+        var ex = await Assert.ThrowsAsync<CosmosException>(() =>
+            container.CreateItemAsync(doc2, new PartitionKey("pk1")));
+        ex.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Handler_UniqueKeyPolicy_NestedPath_DifferentValues_Succeeds()
+    {
+        var container = await _fixture.CreateContainerAsync("uk-nested-ok", "/partitionKey", props =>
+        {
+            props.UniqueKeyPolicy = new UniqueKeyPolicy
+            {
+                UniqueKeys = { new UniqueKey { Paths = { "/nested/description" } } }
+            };
+        });
+
+        var doc1 = new TestDocument { Id = "uk3", PartitionKey = "pk1", Name = "A", Nested = new NestedObject { Description = "val-one", Score = 1.0 } };
+        var doc2 = new TestDocument { Id = "uk4", PartitionKey = "pk1", Name = "B", Nested = new NestedObject { Description = "val-two", Score = 2.0 } };
+
+        var r1 = await container.CreateItemAsync(doc1, new PartitionKey("pk1"));
+        var r2 = await container.CreateItemAsync(doc2, new PartitionKey("pk1"));
+
+        r1.StatusCode.Should().Be(HttpStatusCode.Created);
+        r2.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
+
+    [Fact]
+    public async Task Handler_UniqueKeyPolicy_NestedPath_DifferentPartitions_Succeeds()
+    {
+        // Unique keys are scoped to logical partition — same nested value in different partitions is allowed
+        var container = await _fixture.CreateContainerAsync("uk-nested-xpk", "/partitionKey", props =>
+        {
+            props.UniqueKeyPolicy = new UniqueKeyPolicy
+            {
+                UniqueKeys = { new UniqueKey { Paths = { "/nested/description" } } }
+            };
+        });
+
+        var doc1 = new TestDocument { Id = "uk5", PartitionKey = "pk1", Name = "A", Nested = new NestedObject { Description = "same-val", Score = 1.0 } };
+        var doc2 = new TestDocument { Id = "uk6", PartitionKey = "pk2", Name = "B", Nested = new NestedObject { Description = "same-val", Score = 2.0 } };
+
+        var r1 = await container.CreateItemAsync(doc1, new PartitionKey("pk1"));
+        var r2 = await container.CreateItemAsync(doc2, new PartitionKey("pk2"));
+
+        r1.StatusCode.Should().Be(HttpStatusCode.Created);
+        r2.StatusCode.Should().Be(HttpStatusCode.Created);
+    }
 }

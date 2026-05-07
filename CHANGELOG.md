@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.12] - 2026-05-07
+
+### Fixed
+- UniqueKeyPolicy with nested paths (e.g. `/address/zipCode`) now correctly enforces uniqueness constraints (Issues #10, #13). The path resolution was using slash-separated notation which `JObject.SelectToken` doesn't support — now converts to dot notation.
+- `IContainerTestSetup` now exposes `UniqueKeyPolicy` property, allowing unique key policies to be configured through the `InMemoryCosmos.Create()` builder and test fixtures.
+
 ## [4.0.11] - 2026-05-07
 
 ### Fixed

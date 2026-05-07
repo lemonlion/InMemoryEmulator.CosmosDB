@@ -53,6 +53,8 @@ public sealed class InMemoryTestFixture : ITestContainerFixture
         // Apply the captured settings to the IContainerTestSetup
         if (props.DefaultTimeToLive.HasValue)
             setup.DefaultTimeToLive = props.DefaultTimeToLive;
+        if (props.UniqueKeyPolicy?.UniqueKeys?.Count > 0)
+            setup.UniqueKeyPolicy = props.UniqueKeyPolicy;
     }
 
     public ValueTask DisposeAsync()

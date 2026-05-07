@@ -96,6 +96,12 @@ public interface IContainerTestSetup
     int? DefaultTimeToLive { get; set; }
 
     /// <summary>
+    /// The unique key policy for this container. Unique keys enforce uniqueness constraints
+    /// on paths within a logical partition. Set before inserting items.
+    /// </summary>
+    UniqueKeyPolicy UniqueKeyPolicy { get; set; }
+
+    /// <summary>
     /// Number of feed ranges returned by <c>GetFeedRangesAsync</c>. Defaults to 1.
     /// Set to a higher value to simulate multiple physical partitions.
     /// </summary>

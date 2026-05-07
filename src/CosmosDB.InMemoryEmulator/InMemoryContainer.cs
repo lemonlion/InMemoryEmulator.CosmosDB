@@ -305,6 +305,13 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     }
     private int? _defaultTimeToLive;
 
+    /// <inheritdoc />
+    public UniqueKeyPolicy UniqueKeyPolicy
+    {
+        get => _containerProperties.UniqueKeyPolicy;
+        set => _containerProperties.UniqueKeyPolicy = value ?? new UniqueKeyPolicy();
+    }
+
     /// <summary>The partition key path(s) for this container.</summary>
     public IReadOnlyList<string> PartitionKeyPaths { get; }
 
@@ -3319,7 +3326,9 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         foreach (var uniqueKey in policy.UniqueKeys)
         {
-            var newValues = uniqueKey.Paths.Select(p => jObj.SelectToken(p.TrimStart('/'))?.ToString()).ToList();
+            // Cosmos DB unique key paths use /parent/child format.
+            // JObject.SelectToken uses dot notation (parent.child).
+            var newValues = uniqueKey.Paths.Select(p => jObj.SelectToken(p.TrimStart('/').Replace('/', '.'))?.ToString()).ToList();
 
             foreach (var (existingKey, existingJson) in _items)
             {
@@ -3327,7 +3336,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 if (excludeItemId != null && existingKey.Id == excludeItemId) continue;
 
                 var existingObj = JsonParseHelpers.ParseJson(existingJson);
-                var existingValues = uniqueKey.Paths.Select(p => existingObj.SelectToken(p.TrimStart('/'))?.ToString()).ToList();
+                var existingValues = uniqueKey.Paths.Select(p => existingObj.SelectToken(p.TrimStart('/').Replace('/', '.'))?.ToString()).ToList();
 
                 if (newValues.SequenceEqual(existingValues))
                 {
