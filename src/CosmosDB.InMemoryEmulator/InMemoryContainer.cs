@@ -702,7 +702,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         ValidatePerItemTtl(jObj);
         var pk = ExtractPartitionKeyValue(partitionKey, jObj);
         var key = ItemKey(itemId, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -731,6 +730,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 }
             }
 
+            TrackBatchWrite(key);
             var etag = GenerateETag();
             _etags[key] = etag;
             _timestamps[key] = DateTimeOffset.UtcNow;
@@ -816,7 +816,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         ValidatePerItemTtl(jObj);
         var pk = ExtractPartitionKeyValue(partitionKey, jObj);
         var key = ItemKey(itemId, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -859,6 +858,8 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _timestamps[key] = DateTimeOffset.UtcNow;
                 _items[key] = EnrichWithSystemProperties(json, etag, _timestamps[key]);
             }
+
+            TrackBatchWrite(key);
 
             try
             {
@@ -927,7 +928,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         var pk = ExtractPartitionKeyValue(partitionKey, jObj);
         var key = ItemKey(id, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -977,6 +977,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = EnrichWithSystemProperties(json, etag, _timestamps[key]);
             }
 
+            TrackBatchWrite(key);
             try
             {
                 var committedDoc = JsonParseHelpers.ParseJson(_items[key]);
@@ -1013,7 +1014,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         cancellationToken.ThrowIfCancellationRequested();
         var pk = PartitionKeyToString(partitionKey);
         var key = ItemKey(id, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -1039,6 +1039,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
 
+            TrackBatchWrite(key);
             try
             {
                 ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(existingJson), "Delete");
@@ -1083,7 +1084,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         var pk = PartitionKeyToString(partitionKey);
         var key = ItemKey(id, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -1161,6 +1161,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         }
         var enrichedJson = _items[key];
 
+        TrackBatchWrite(key);
         ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(enrichedJson), "Replace");
         RecordChangeFeed(id, pk, _items[key]);
 
@@ -1203,7 +1204,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         var pk = ExtractPartitionKeyValue(partitionKey, jObj);
         var key = ItemKey(itemId, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -1228,6 +1228,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     return CreateResponseMessage(HttpStatusCode.Conflict);
             }
 
+            TrackBatchWrite(key);
             var etag = GenerateETag();
             _etags[key] = etag;
             _timestamps[key] = DateTimeOffset.UtcNow;
@@ -1303,7 +1304,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         if (pkMismatch is not null) return pkMismatch;
         var pk = ExtractPartitionKeyValue(partitionKey, jObj);
         var key = ItemKey(itemId, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -1352,6 +1352,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = enrichedJson;
             }
 
+            TrackBatchWrite(key);
             try
             {
                 ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(enrichedJson), "Upsert");
@@ -1393,7 +1394,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         if (sizeError is not null) return sizeError;
         var pk = PartitionKeyToString(partitionKey);
         var key = ItemKey(id, pk);
-        TrackBatchWrite(key);
 
         JObject jObj;
         try { jObj = JsonParseHelpers.ParseJson(json); }
@@ -1464,6 +1464,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = enrichedJson;
             }
 
+            TrackBatchWrite(key);
             try
             {
                 ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(enrichedJson), "Replace");
@@ -1493,7 +1494,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         cancellationToken.ThrowIfCancellationRequested();
         var pk = PartitionKeyToString(partitionKey);
         var key = ItemKey(id, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -1519,6 +1519,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
 
+            TrackBatchWrite(key);
             try
             {
                 ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(existingJson), "Delete");
@@ -1568,7 +1569,6 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         var pk = PartitionKeyToString(partitionKey);
         var key = ItemKey(id, pk);
-        TrackBatchWrite(key);
 
         var itemLock = _itemLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await itemLock.WaitAsync(cancellationToken);
@@ -1651,6 +1651,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         }
         var enrichedJson = _items[key];
 
+        TrackBatchWrite(key);
         try
         {
             ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(enrichedJson), "Replace");

@@ -175,6 +175,68 @@ public class FakeCosmosHandlerBatchTests(EmulatorSession session) : IAsyncLifeti
     }
 
     [Fact]
+    public async Task Batch_ConcurrentCreateSameId_OnlyOneSucceeds()
+    {
+        // Issue #57: When multiple concurrent transactional batches each attempt to CreateItem
+        // with the same id and partition key, only one should succeed. The others should fail
+        // with 409 Conflict and roll back (transactional semantics).
+        // Ref: https://learn.microsoft.com/en-us/rest/api/cosmos-db/create-a-document
+        //   "If the id already exists in the collection, a 409 Conflict is returned."
+        var tasks = Enumerable.Range(1, 3).Select(attempt => Task.Run(async () =>
+        {
+            var batch = _container.CreateTransactionalBatch(new PartitionKey("concurrent-pk"));
+            batch.CreateItem(new TestDocument
+            {
+                Id = "latest-conc",
+                PartitionKey = "concurrent-pk",
+                Name = $"Attempt-{attempt}",
+                Value = attempt
+            });
+            batch.CreateItem(new TestDocument
+            {
+                Id = $"tracking-conc-{attempt}",
+                PartitionKey = "concurrent-pk",
+                Name = $"Tracking-{attempt}",
+                Value = attempt
+            });
+            return await batch.ExecuteAsync();
+        })).ToArray();
+
+        var results = await Task.WhenAll(tasks);
+
+        var successCount = results.Count(r => r.IsSuccessStatusCode);
+        var failCount = results.Count(r => !r.IsSuccessStatusCode);
+
+        // Exactly one batch should succeed
+        successCount.Should().Be(1, "only one concurrent batch creating the same id should succeed");
+        failCount.Should().Be(2, "the other batches should fail with Conflict and roll back");
+
+        // The failed batches should have 409 Conflict status
+        foreach (var failed in results.Where(r => !r.IsSuccessStatusCode))
+        {
+            failed.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        }
+
+        // Verify exactly one "latest-conc" document exists
+        var latestResponse = await _container.ReadItemAsync<TestDocument>("latest-conc", new PartitionKey("concurrent-pk"));
+        latestResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Verify only the winning batch's tracking document exists
+        var winningAttempt = latestResponse.Resource.Value;
+        var trackingResponse = await _container.ReadItemAsync<TestDocument>(
+            $"tracking-conc-{winningAttempt}", new PartitionKey("concurrent-pk"));
+        trackingResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // The other tracking documents should not exist (were rolled back)
+        foreach (var attempt in Enumerable.Range(1, 3).Where(a => a != winningAttempt))
+        {
+            var ex = await Assert.ThrowsAsync<CosmosException>(() =>
+                _container.ReadItemAsync<TestDocument>($"tracking-conc-{attempt}", new PartitionKey("concurrent-pk")));
+            ex.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+    }
+
+    [Fact]
     [Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
     public void BatchSchemas_SelfBuiltSchemasMatchSdkInternals()
     {
