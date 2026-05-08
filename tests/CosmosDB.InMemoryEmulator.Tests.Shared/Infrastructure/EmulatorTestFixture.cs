@@ -1,17 +1,21 @@
+using System.Net;
 using Microsoft.Azure.Cosmos;
+using Newtonsoft.Json.Linq;
 
 namespace CosmosDB.InMemoryEmulator.Tests.Infrastructure;
 
 /// <summary>
 /// Per-test-class fixture that creates real containers on the emulator shared
-/// via <see cref="EmulatorSession"/>. Each test gets a uniquely-named container
-/// (base name + short GUID) so queries like <c>SELECT * FROM c</c> only see
-/// the current test's data and there is no cross-test bleed.
+/// via <see cref="EmulatorSession"/>. Containers are cached by name in the
+/// session for reuse across all tests in a class (and across classes that
+/// share the same container name). This avoids per-test container create/delete
+/// churn that exhausts the emulator's finite partition pool (PARTITION_COUNT).
+/// Containers are deleted once at the end of the test run in
+/// <see cref="EmulatorSession.DisposeAsync"/>.
 /// </summary>
 public sealed class EmulatorTestFixture : ITestContainerFixture
 {
     private readonly EmulatorSession _session;
-    private readonly List<string> _createdContainers = [];
 
     public TestTarget Target => _session.Target;
     public bool IsEmulator => true;
@@ -28,21 +32,27 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
         string containerName,
         string partitionKeyPath,
         Action<ContainerProperties>? configure = null)
-        => CreateContainerCoreAsync(containerName, name => new ContainerProperties(name, partitionKeyPath), configure);
+        => CreateContainerCoreAsync(containerName, partitionKeyPath, name => new ContainerProperties(name, partitionKeyPath), configure);
 
     public Task<Container> CreateContainerAsync(
         string containerName,
         IReadOnlyList<string> partitionKeyPaths,
         Action<ContainerProperties>? configure = null)
-        => CreateContainerCoreAsync(containerName, name => new ContainerProperties(name, partitionKeyPaths), configure);
+        => CreateContainerCoreAsync(containerName, partitionKeyPaths[0], name => new ContainerProperties(name, partitionKeyPaths), configure);
 
     private async Task<Container> CreateContainerCoreAsync(
-        string containerName, Func<string, ContainerProperties> propsFactory, Action<ContainerProperties>? configure)
+        string containerName, string partitionKeyPath,
+        Func<string, ContainerProperties> propsFactory, Action<ContainerProperties>? configure)
     {
-        var uniqueName = $"{containerName}-{Guid.NewGuid():N}";
-        _createdContainers.Add(uniqueName);
+        // Reuse cached container if it already exists for this name.
+        // Clean any leftover documents from previous tests to maintain isolation.
+        if (_session.ContainerCache.TryGetValue(containerName, out var existing))
+        {
+            await CleanContainerAsync(existing, partitionKeyPath);
+            return existing;
+        }
 
-        var props = propsFactory(uniqueName);
+        var props = propsFactory(containerName);
         configure?.Invoke(props);
 
         // Partition services can return 503 when the emulator is still starting
@@ -51,30 +61,56 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
         var response = await EmulatorRetry.RunAsync(
             () => _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props),
             $"CreateContainer({props.Id})");
-        return response.Container;
+
+        var container = response.Container;
+        _session.ContainerCache.TryAdd(containerName, container);
+        return container;
     }
 
-    // Cleanup matters even with unique per-test names: the emulator's partition
-    // pool is finite (PARTITION_COUNT=10 locally and in CI), so leaving dozens
-    // of test containers alive across a run will exhaust slots and cause
-    // subsequent CreateContainer calls to 503. Locally the Docker container is
-    // usually thrown away, but in CI the same emulator service serves every
-    // test class in the job.
-    public async ValueTask DisposeAsync()
+    /// <summary>
+    /// Removes all documents from a cached container to maintain per-test isolation.
+    /// Faster than dropping and recreating the container (which exhausts the partition pool).
+    /// </summary>
+    private static async Task CleanContainerAsync(Container container, string partitionKeyPath)
     {
-        if (_session.EmulatorDatabase is null) return;
+        var pkProp = partitionKeyPath.TrimStart('/');
+        // Use a small page size to avoid oversized responses
+        var query = container.GetItemQueryIterator<JObject>(
+            $"SELECT c.id, c[\"{pkProp}\"] AS __pk FROM c",
+            requestOptions: new QueryRequestOptions { MaxItemCount = 100 });
 
-        foreach (var name in _createdContainers)
+        while (query.HasMoreResults)
         {
-            try
+            var page = await query.ReadNextAsync();
+            foreach (var item in page)
             {
-                await _session.EmulatorDatabase.GetContainer(name).DeleteContainerAsync();
-            }
-            catch
-            {
-                // Best-effort cleanup — container may already be gone.
+                var id = item["id"]?.ToString();
+                var pkValue = item["__pk"];
+                if (id is null) continue;
+
+                var pk = pkValue?.Type switch
+                {
+                    JTokenType.String => new PartitionKey(pkValue.ToString()),
+                    JTokenType.Integer => new PartitionKey(pkValue.Value<long>()),
+                    JTokenType.Float => new PartitionKey(pkValue.Value<double>()),
+                    JTokenType.Boolean => new PartitionKey(pkValue.Value<bool>()),
+                    JTokenType.Null or null => PartitionKey.None,
+                    _ => new PartitionKey(pkValue.ToString())
+                };
+
+                try
+                {
+                    await container.DeleteItemAsync<object>(id, pk);
+                }
+                catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+                {
+                    // Item may have been deleted by TTL or another concurrent operation
+                }
             }
         }
-        _createdContainers.Clear();
     }
+
+    // No per-test container deletion needed: containers are cached and deleted
+    // at the end of the test run by EmulatorSession.
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

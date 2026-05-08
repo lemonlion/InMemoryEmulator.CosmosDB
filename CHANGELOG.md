@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.15] - 2026-05-08
+
+### Fixed
+- `EmulatorTestFixture` now caches containers by name in the session and reuses them across tests instead of creating/deleting a uniquely-named container per test method (Issue #43). This prevents partition pool exhaustion on the Linux emulator when running test classes with many tests (e.g. PartitionKeyTests, LinqTests, CrudHardeningTests, BulkTests). Containers are cleaned (all documents deleted) between tests to maintain isolation, and only deleted at the end of the test run.
+- Tagged `Linq_OrderBy_ThenBy` test as `InMemoryOnly` — real Cosmos DB requires a composite index for multi-field ORDER BY, which the in-memory emulator intentionally does not enforce (Issue #44 triage).
+- Verified JsTriggers `queryDocuments` callback correctly passes `responseOptions` object (not null) — already fixed in current codebase (Issue #22). Added regression tests.
+- Verified JsTriggers bulk delete stored procedure pattern (200 documents, recursive pagination) completes without stack overflow — already fixed (Issue #23). Added regression tests.
+
 ## [4.0.14] - 2026-05-07
 
 ### Fixed

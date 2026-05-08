@@ -1260,6 +1260,205 @@ public class JsTriggerDivergentDeepTests
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  Issue #22: queryDocuments callback receives responseOptions (not null)
+//  Issue #23: Bulk delete SP with deep recursion completes without overflow
+// ═══════════════════════════════════════════════════════════════════════════
+
+public class JsSprocQueryResponseOptionsTests
+{
+    private readonly InMemoryContainer _container = new("query-response-opts", "/pk");
+
+    public JsSprocQueryResponseOptionsTests()
+    {
+        _container.UseJsStoredProcedures();
+    }
+
+    [Fact]
+    public async Task Issue22_QueryDocuments_ResponseOptions_IsNotNull()
+    {
+        // Seed a document
+        await _container.CreateItemAsync(
+            JObject.FromObject(new { id = "1", pk = "p", val = 10 }), new PartitionKey("p"));
+
+        // SP that accesses responseOptions.continuation — should NOT throw
+        await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties
+        {
+            Id = "checkResponseOpts",
+            Body = @"function checkResponseOpts() {
+                var coll = getContext().getCollection();
+                coll.queryDocuments(
+                    coll.getSelfLink(),
+                    'SELECT * FROM c',
+                    {},
+                    function(err, docs, responseOptions) {
+                        if (err) throw err;
+                        if (responseOptions === null || responseOptions === undefined) {
+                            throw new Error('responseOptions is null or undefined');
+                        }
+                        var hasContinuation = responseOptions.hasOwnProperty('continuation');
+                        getContext().getResponse().setBody(JSON.stringify({
+                            docCount: docs.length,
+                            hasContinuation: hasContinuation,
+                            continuationIsNull: responseOptions.continuation === null
+                        }));
+                    }
+                );
+            }"
+        });
+
+        var result = await _container.Scripts.ExecuteStoredProcedureAsync<string>(
+            "checkResponseOpts", new PartitionKey("p"), Array.Empty<dynamic>());
+
+        var parsed = JObject.Parse(result.Resource);
+        ((int)parsed["docCount"]!).Should().Be(1);
+        ((bool)parsed["hasContinuation"]!).Should().BeTrue();
+        ((bool)parsed["continuationIsNull"]!).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Issue22_QueryDocuments_WithOptsObject_CallbackReceivesResponseOptions()
+    {
+        // The 4-argument form: queryDocuments(link, query, opts, callback)
+        await _container.CreateItemAsync(
+            JObject.FromObject(new { id = "a", pk = "p" }), new PartitionKey("p"));
+        await _container.CreateItemAsync(
+            JObject.FromObject(new { id = "b", pk = "p" }), new PartitionKey("p"));
+
+        await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties
+        {
+            Id = "withOpts",
+            Body = @"function withOpts() {
+                var coll = getContext().getCollection();
+                coll.queryDocuments(
+                    coll.getSelfLink(),
+                    'SELECT * FROM c',
+                    { continuation: null },
+                    function(err, docs, responseOptions) {
+                        if (err) throw err;
+                        if (!responseOptions) throw new Error('responseOptions is falsy');
+                        // Since emulator returns all docs at once, continuation should be null
+                        if (responseOptions.continuation !== null) {
+                            throw new Error('Expected null continuation but got: ' + responseOptions.continuation);
+                        }
+                        getContext().getResponse().setBody(docs.length.toString());
+                    }
+                );
+            }"
+        });
+
+        var result = await _container.Scripts.ExecuteStoredProcedureAsync<string>(
+            "withOpts", new PartitionKey("p"), Array.Empty<dynamic>());
+        result.Resource.Should().Be("2");
+    }
+
+    [Fact]
+    public async Task Issue23_BulkDelete_WithRecursion_CompletesSuccessfully()
+    {
+        // Seed 50 documents (enough to validate recursion pattern works)
+        for (int i = 0; i < 50; i++)
+            await _container.CreateItemAsync(
+                JObject.FromObject(new { id = $"item{i}", pk = "p" }), new PartitionKey("p"));
+
+        // Standard Cosmos DB recursive bulk delete SP pattern
+        await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties
+        {
+            Id = "bulkDelete",
+            Body = @"function bulkDelete(query) {
+                var context = getContext();
+                var collection = context.getCollection();
+                var response = context.getResponse();
+                var deletedCount = 0;
+
+                function tryDelete(continuation) {
+                    var accepted = collection.queryDocuments(
+                        collection.getSelfLink(),
+                        query,
+                        { continuation: continuation },
+                        function(err, documents, responseOptions) {
+                            if (err) throw err;
+                            for (var i = 0; i < documents.length; i++) {
+                                collection.deleteDocument(
+                                    documents[i]._self,
+                                    { etag: documents[i]._etag },
+                                    function(deleteErr) { if (deleteErr) throw deleteErr; }
+                                );
+                                deletedCount++;
+                            }
+                            if (responseOptions && responseOptions.continuation) {
+                                tryDelete(responseOptions.continuation);
+                            } else {
+                                response.setBody(deletedCount.toString());
+                            }
+                        }
+                    );
+                }
+                tryDelete(null);
+            }"
+        });
+
+        var result = await _container.Scripts.ExecuteStoredProcedureAsync<string>(
+            "bulkDelete", new PartitionKey("p"), new dynamic[] { "SELECT * FROM c" });
+
+        result.Resource.Should().Be("50");
+
+        // Verify all documents are deleted
+        var iter = _container.GetItemQueryIterator<JObject>(
+            new QueryDefinition("SELECT * FROM c"),
+            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey("p") });
+        var remaining = new List<JObject>();
+        while (iter.HasMoreResults) remaining.AddRange(await iter.ReadNextAsync());
+        remaining.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Issue23_BulkDelete_200Documents_NoStackOverflow()
+    {
+        // Seed 200 documents — the exact scenario from the issue
+        for (int i = 0; i < 200; i++)
+            await _container.CreateItemAsync(
+                JObject.FromObject(new { id = i.ToString(), pk = "p1" }), new PartitionKey("p1"));
+
+        await _container.Scripts.CreateStoredProcedureAsync(new StoredProcedureProperties
+        {
+            Id = "BulkDelete",
+            Body = @"function bulkDelete(query) {
+                var collection = getContext().getCollection();
+                var response = getContext().getResponse();
+                var count = 0;
+
+                function tryDelete(continuation) {
+                    collection.queryDocuments(
+                        collection.getSelfLink(),
+                        query,
+                        { continuation: continuation },
+                        function (err, documents, responseOptions) {
+                            if (err) throw err;
+                            documents.forEach(function(doc) {
+                                collection.deleteDocument(doc._self,
+                                    { etag: doc._etag },
+                                    function(err) { if (err) throw err; });
+                                count++;
+                            });
+                            if (responseOptions && responseOptions.continuation) {
+                                tryDelete(responseOptions.continuation);
+                            } else {
+                                response.setBody(count.toString());
+                            }
+                        });
+                }
+                tryDelete(null);
+            }"
+        });
+
+        // This should NOT throw StackOverflowException
+        var result = await _container.Scripts.ExecuteStoredProcedureAsync<string>(
+            "BulkDelete", new PartitionKey("p1"), new dynamic[] { "SELECT * FROM c" });
+
+        result.Resource.Should().Be("200");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 //  Phase 10: Bug Fixes & Potential Issues
 // ═══════════════════════════════════════════════════════════════════════════
 

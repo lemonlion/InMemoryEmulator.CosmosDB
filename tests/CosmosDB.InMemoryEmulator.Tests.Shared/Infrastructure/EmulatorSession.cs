@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Sockets;
 using Microsoft.Azure.Cosmos;
 using Xunit;
@@ -26,6 +27,13 @@ public sealed class EmulatorSession : IAsyncLifetime
     private const int MaxConcurrentHttpRequests = 8;
 
     private readonly SemaphoreSlim _httpGate = new(MaxConcurrentHttpRequests, MaxConcurrentHttpRequests);
+
+    /// <summary>
+    /// Per-run cache of emulator containers keyed by a deterministic name.
+    /// Avoids per-test container create/delete churn that exhausts the
+    /// emulator's finite partition pool (PARTITION_COUNT) on CI runners.
+    /// </summary>
+    internal readonly ConcurrentDictionary<string, Container> ContainerCache = new();
 
     public TestTarget Target { get; }
     public string Endpoint { get; }
@@ -65,11 +73,27 @@ public sealed class EmulatorSession : IAsyncLifetime
         Console.WriteLine("[EmulatorSession] Emulator database ready.");
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        // Clean up all cached containers at end of test run
+        if (EmulatorDatabase is not null)
+        {
+            foreach (var (name, _) in ContainerCache)
+            {
+                try
+                {
+                    await EmulatorDatabase.GetContainer(name).DeleteContainerAsync();
+                }
+                catch
+                {
+                    // Best-effort cleanup — container may already be gone.
+                }
+            }
+            ContainerCache.Clear();
+        }
+
         EmulatorClient?.Dispose();
         _httpGate.Dispose();
-        return ValueTask.CompletedTask;
     }
 
     private static CosmosClient CreateEmulatorClient(string endpoint, SemaphoreSlim httpGate)

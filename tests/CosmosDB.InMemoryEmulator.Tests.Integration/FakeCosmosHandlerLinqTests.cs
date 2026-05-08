@@ -1,5 +1,6 @@
 using System.Net;
 using AwesomeAssertions;
+using CosmosDB.InMemoryEmulator.Tests.Infrastructure;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Cosmos.Linq;
 using Newtonsoft.Json;
@@ -162,6 +163,7 @@ public class FakeCosmosHandlerLinqTests(EmulatorSession session) : IAsyncLifetim
     }
 
     [Fact]
+    [Trait(TestTraits.Target, TestTraits.InMemoryOnly)] // Real Cosmos requires composite index for multi-field ORDER BY
     public async Task Linq_OrderBy_ThenBy()
     {
         var iterator = _container.GetItemLinqQueryable<TestDocument>()
