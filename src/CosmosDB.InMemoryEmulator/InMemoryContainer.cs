@@ -44,11 +44,11 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     };
 
     private static readonly HashSet<string> AggregateFunctions =
-        new(StringComparer.OrdinalIgnoreCase) { "COUNT", "SUM", "AVG", "MIN", "MAX" };
+        new(StringComparer.OrdinalIgnoreCase) { "COUNT", "COUNTIF", "SUM", "AVG", "MIN", "MAX" };
 
     /// <summary>
     /// Recursively checks whether a SqlExpression tree contains any aggregate function call
-    /// (COUNT, SUM, AVG, MIN, MAX). Used to detect aggregates inside object/array literals.
+    /// (COUNT, COUNTIF, SUM, AVG, MIN, MAX). Used to detect aggregates inside object/array literals.
     /// </summary>
     private static bool ContainsAggregateCall(SqlExpression expr) => expr switch
     {
@@ -4597,6 +4597,12 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                         });
                     }
                 }
+                // Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+                //   COUNTIF(<bool_expr>) counts items where the expression evaluates to true.
+                else if (funcName == "COUNTIF" && field.SqlExpr is FunctionCallExpression countIfFunc)
+                {
+                    resultObj[outputName] = EvaluateCountIf(countIfFunc, groupItems, fromAlias, parameters);
+                }
                 else if (funcName is "SUM" or "AVG" && innerArg != null)
                 {
                     var values = ExtractNumericValues(groupItems, innerArg, fromAlias, parameters);
@@ -4894,6 +4900,26 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         };
     }
 
+    /// <summary>
+    /// Evaluates COUNTIF(<bool_expr>) — counts items where the boolean expression evaluates to true.
+    /// Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+    ///   "Adds an aggregate operator for CountIf" — undocumented server-side aggregate.
+    /// </summary>
+    private static int EvaluateCountIf(
+        FunctionCallExpression func, List<string> items, string fromAlias,
+        IDictionary<string, object> parameters)
+    {
+        if (func.Arguments.Length < 1) return 0;
+        var boolExpr = func.Arguments[0];
+        return items.Count(json =>
+        {
+            var jObj = JsonParseHelpers.ParseJson(json);
+            var val = EvaluateSqlExpression(boolExpr, jObj, fromAlias,
+                parameters ?? new Dictionary<string, object>());
+            return IsTruthy(val);
+        });
+    }
+
     private static object EvaluateHavingAggregate(
         FunctionCallExpression func, List<string> groupItems, string fromAlias,
         IDictionary<string, object> parameters = null)
@@ -4918,6 +4944,10 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     return jObj.SelectToken(countPath) is JToken t && t.Type != JTokenType.Null;
                 });
             }
+            // Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+            //   COUNTIF(<bool_expr>) counts items where the expression evaluates to true.
+            case "COUNTIF":
+                return (double)EvaluateCountIf(func, groupItems, fromAlias, parameters);
             case "SUM":
             case "AVG":
             case "MIN":
@@ -4948,7 +4978,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
     /// <summary>
     /// Evaluates a SELECT expression within GROUP BY context, resolving aggregate calls
-    /// (COUNT, SUM, AVG, MIN, MAX) against the group items rather than treating them as passthroughs.
+    /// (COUNT, COUNTIF, SUM, AVG, MIN, MAX) against the group items rather than treating them as passthroughs.
     /// Used for expressions like: SELECT VALUE {"cnt": COUNT(1), "total": SUM(c.val)}
     /// </summary>
     private static object EvaluateGroupByProjectionExpression(
@@ -5256,6 +5286,12 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     });
                 }
             }
+            // Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+            //   COUNTIF(<bool_expr>) counts items where the expression evaluates to true.
+            else if (funcName == "COUNTIF" && field.SqlExpr is FunctionCallExpression countIfFunc)
+            {
+                resultObj[outputName] = EvaluateCountIf(countIfFunc, items, parsed.FromAlias, parameters);
+            }
             else if (funcName is "SUM" or "AVG" && innerArg != null)
             {
                 var values = ExtractNumericValues(items, innerArg, parsed.FromAlias, parameters);
@@ -5328,6 +5364,9 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                         var path = StripAliasPrefix(innerArg, fromAlias);
                         return jObj.SelectToken(path) is JToken t && t.Type != JTokenType.Null;
                     }),
+                    // Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+                    //   COUNTIF(<bool_expr>) counts items where the expression evaluates to true.
+                    "COUNTIF" => (object)EvaluateCountIf(func, items, fromAlias, parameters),
                     "SUM" => ExtractNumericValues(items, innerArg, fromAlias, parameters) is var sv && sv.Count > 0 ? sv.Sum() : UndefinedValue.Instance,
                     "AVG" => ExtractNumericValues(items, innerArg, fromAlias, parameters) is var av && av.Count > 0 ? av.Average() : UndefinedValue.Instance,
                     "MIN" => AggregateMinMax(ExtractTokenValues(items, innerArg, fromAlias, parameters), true),
@@ -7792,6 +7831,19 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 return (double)sourceItems.Count(si => si.SelectToken(fieldPath) is not null);
             }
             return (double)sourceItems.Count;
+        }
+
+        // Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+        //   COUNTIF(<bool_expr>) counts items where the expression evaluates to true.
+        if (name is "COUNTIF")
+        {
+            if (func.Arguments.Length < 1) return 0.0;
+            var boolExpr = func.Arguments[0];
+            return (double)sourceItems.Count(si =>
+            {
+                var val = EvaluateSqlExpression(boolExpr, si, fromAlias, parameters);
+                return IsTruthy(val);
+            });
         }
 
         // For SUM/AVG/MIN/MAX, extract numeric values from the first argument

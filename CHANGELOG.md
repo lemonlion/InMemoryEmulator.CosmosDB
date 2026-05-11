@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.16] - 2026-05-11
+
+### Added
+- `COUNTIF(<bool_expr>)` aggregate function is now supported in SQL queries. This undocumented Cosmos DB server-side aggregate (added in .NET SDK [PR #4738](https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738)) counts items where the boolean expression evaluates to true. Works in all contexts: standalone queries, GROUP BY, HAVING, mixed aggregates, subqueries, and SELECT VALUE projections.
+
 ## [4.0.15] - 2026-05-08
 
 ### Fixed

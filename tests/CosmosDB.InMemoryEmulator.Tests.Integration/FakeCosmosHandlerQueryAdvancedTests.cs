@@ -970,4 +970,68 @@ public class FakeCosmosHandlerQueryAdvancedTests(EmulatorSession session) : IAsy
         results.Should().HaveCount(1);
         results[0].Should().Be(42);
     }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    //  COUNTIF aggregate
+    //  Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
+    //    "Adds an aggregate operator for CountIf" — undocumented server-side
+    //    aggregate function. COUNTIF(<bool_expr>) counts items where the
+    //    expression evaluates to true.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public async Task Query_CountIf_SimpleCondition()
+    {
+        // 5 seeded docs: scores 30, 20, 50, 10, 40. Three have score >= 30.
+        var results = await DrainQuery<int>(
+            "SELECT VALUE COUNTIF(c.score >= 30) FROM c");
+
+        results.Should().HaveCount(1);
+        results[0].Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Query_CountIf_WithAlias()
+    {
+        var results = await DrainQuery<JObject>(
+            "SELECT COUNTIF(c.isActive = true) AS activeCount FROM c");
+
+        results.Should().HaveCount(1);
+        results[0]["activeCount"]!.Value<int>().Should().Be(5);
+    }
+
+    [Fact]
+    public async Task Query_CountIf_NoMatchesReturnsZero()
+    {
+        var results = await DrainQuery<int>(
+            "SELECT VALUE COUNTIF(c.score > 100) FROM c");
+
+        results.Should().HaveCount(1);
+        results[0].Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Query_CountIf_WithGroupBy()
+    {
+        var results = await DrainQuery<JObject>(
+            "SELECT c.partitionKey, COUNTIF(c.score >= 30) AS highScorers FROM c GROUP BY c.partitionKey");
+
+        results.Should().HaveCount(2);
+        var pk1 = results.First(r => r["partitionKey"]!.Value<string>() == "pk1");
+        pk1["highScorers"]!.Value<int>().Should().Be(2); // Alice=30, Eve=40
+        var pk2 = results.First(r => r["partitionKey"]!.Value<string>() == "pk2");
+        pk2["highScorers"]!.Value<int>().Should().Be(1); // Charlie=50
+    }
+
+    [Fact]
+    public async Task Query_CountIf_MixedWithOtherAggregates()
+    {
+        var results = await DrainQuery<JObject>(
+            "SELECT COUNT(1) AS total, COUNTIF(c.score >= 30) AS highScorers, SUM(c.score) AS totalScore FROM c");
+
+        results.Should().HaveCount(1);
+        results[0]["total"]!.Value<int>().Should().Be(5);
+        results[0]["highScorers"]!.Value<int>().Should().Be(3);
+        results[0]["totalScore"]!.Value<int>().Should().Be(150);
+    }
 }

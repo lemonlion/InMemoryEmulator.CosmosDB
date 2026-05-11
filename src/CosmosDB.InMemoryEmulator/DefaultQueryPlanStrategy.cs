@@ -187,6 +187,7 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
             string? aggType = name switch
             {
                 "COUNT" => "Count",
+                "COUNTIF" => "CountIf",
                 "SUM" => "Sum",
                 "MIN" => "Min",
                 "MAX" => "Max",
