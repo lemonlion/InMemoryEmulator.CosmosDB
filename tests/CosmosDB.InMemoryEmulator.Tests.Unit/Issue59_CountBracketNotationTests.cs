@@ -23,10 +23,10 @@ public class Issue59_CountBracketNotationTests
         var container = cosmos.Containers["transactions"];
         await SeedTransactions(container);
 
-        var iterator = container.GetItemQueryIterator<JObject>(
-            "SELECT SUM(c.grossSettlementValue[\"value\"]) AS total FROM c");
+        var iterator = container.GetItemQueryIterator<decimal>(
+            "SELECT VALUE SUM(c.grossSettlementValue[\"value\"]) FROM c");
         var page = await iterator.ReadNextAsync();
-        page.First()["total"]!.Value<decimal>().Should().Be(100m);
+        page.First().Should().Be(100m);
     }
 
     [Fact]
@@ -39,11 +39,11 @@ public class Issue59_CountBracketNotationTests
         var container = cosmos.Containers["transactions"];
         await SeedTransactions(container);
 
-        var iterator = container.GetItemQueryIterator<JObject>(
-            "SELECT COUNT(c.grossSettlementValue[\"value\"] > 0 ? 1 : undefined) AS cnt FROM c");
+        var iterator = container.GetItemQueryIterator<int>(
+            "SELECT VALUE COUNT(c.grossSettlementValue[\"value\"] > 0 ? 1 : undefined) FROM c");
 
         var page = await iterator.ReadNextAsync();
-        page.First()["cnt"]!.Value<int>().Should().Be(1);
+        page.First().Should().Be(1);
     }
 
     [Fact]
