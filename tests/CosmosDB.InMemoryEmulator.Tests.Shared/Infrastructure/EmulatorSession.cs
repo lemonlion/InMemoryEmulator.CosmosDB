@@ -62,15 +62,33 @@ public sealed class EmulatorSession : IAsyncLifetime
 
         Console.WriteLine("[EmulatorSession] Warming up emulator write path...");
 
-        // The container-creation retry in EmulatorTestFixture handles 503s from
-        // partition services that are still coming up, so we just need the
-        // database itself here — no probe write / read needed.
         var response = await EmulatorRetry.RunAsync(
             () => EmulatorClient.CreateDatabaseIfNotExistsAsync(DatabaseName),
             "CreateDatabase", maxRetries: 30, maxBackoffSeconds: 15);
 
         EmulatorDatabase = response.Database;
-        Console.WriteLine("[EmulatorSession] Emulator database ready.");
+
+        // The Linux Docker emulator's HTTP listener accepts requests before its
+        // partition services are ready for writes — the first POST /dbs/{db}/colls
+        // can still return 503 / 1007 ("high demand in this region") for a minute
+        // or more after the database is reachable. Probe with a real container
+        // create+delete here so the partition services are warm before tests run,
+        // rather than burning a per-test retry budget on the cold start.
+        var probeName = $"warmup-{Guid.NewGuid():N}";
+        await EmulatorRetry.RunAsync(
+            () => EmulatorDatabase.CreateContainerIfNotExistsAsync(new ContainerProperties(probeName, "/id")),
+            "WarmupCreateContainer", maxRetries: 60, maxBackoffSeconds: 15);
+        try
+        {
+            await EmulatorDatabase.GetContainer(probeName).DeleteContainerAsync();
+        }
+        catch
+        {
+            // Best-effort — leftover probe container will be cleaned by the
+            // run's final DisposeAsync sweep if it stays in ContainerCache.
+        }
+
+        Console.WriteLine("[EmulatorSession] Emulator database + partition services ready.");
     }
 
     public async ValueTask DisposeAsync()

@@ -57,10 +57,12 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
 
         // Partition services can return 503 when the emulator is still starting
         // up a new container. The SDK does not retry those automatically for
-        // control-plane ops, so we do it here.
+        // control-plane ops, so we do it here. Use the same generous budget as
+        // the session-level warmup — on cold CI runners the Linux Docker
+        // emulator can take well over a minute to accept writes.
         var response = await EmulatorRetry.RunAsync(
             () => _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props),
-            $"CreateContainer({props.Id})");
+            $"CreateContainer({props.Id})", maxRetries: 30, maxBackoffSeconds: 15);
 
         var container = response.Container;
         _session.ContainerCache.TryAdd(containerName, container);
