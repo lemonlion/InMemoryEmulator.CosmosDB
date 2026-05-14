@@ -69,25 +69,22 @@ public sealed class EmulatorSession : IAsyncLifetime
         EmulatorDatabase = response.Database;
 
         // The Linux Docker emulator's HTTP listener accepts requests before its
-        // partition services accept writes (503 / 1007), and a freshly-created
-        // container's partition routing can return 404 / 1013 ("Collection is
-        // not yet available for read") for tens of seconds after creation. Probe
-        // both planes here so per-test fixtures see a fully-warm emulator
-        // instead of burning their per-test retry budgets on the cold start.
+        // partition services accept writes (503 / 1007). Probe the write plane
+        // here so per-test fixtures see at least a write-ready emulator. We do
+        // NOT probe the read replica — that can lag the write replica by 6-7
+        // minutes per fresh container on the Docker emulator, which exceeds
+        // a viable retry budget for every test class.
         var probeName = $"warmup-{Guid.NewGuid():N}";
         var probeContainer = await EmulatorRetry.RunAsync(
             async () =>
             {
                 var resp = await EmulatorDatabase.CreateContainerIfNotExistsAsync(
                     new ContainerProperties(probeName, "/id"));
-                // Write + read against the new container to confirm the data
-                // plane is responsive — surfaces 404/1013 before tests start.
                 var probeDoc = new { id = "warmup", payload = "ok" };
                 await resp.Container.CreateItemAsync(probeDoc, new PartitionKey(probeDoc.id));
-                _ = await resp.Container.ReadItemAsync<object>(probeDoc.id, new PartitionKey(probeDoc.id));
                 return resp.Container;
             },
-            "WarmupContainerCreateAndRead", maxRetries: 60, maxBackoffSeconds: 15);
+            "WarmupContainerCreate", maxRetries: 60, maxBackoffSeconds: 15);
 
         try { await probeContainer.DeleteContainerAsync(); } catch { /* best-effort */ }
 

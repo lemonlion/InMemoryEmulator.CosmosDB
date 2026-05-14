@@ -56,22 +56,17 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
         configure?.Invoke(props);
 
         // Partition services can return 503 when the emulator is still starting
-        // up a new container, and a freshly-created container's first read can
-        // return 404 / 1013 ("Collection is not yet available for read") until
-        // partition routing settles. Both are tagged transient in EmulatorRetry,
-        // so we probe both planes inside one retry — only return a container
-        // that is genuinely usable for tests.
-        var container = await EmulatorRetry.RunAsync(
-            async () =>
-            {
-                var resp = await _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props);
-                await ProbeDataPlaneAsync(resp.Container, props);
-                return resp.Container;
-            },
+        // up a new container. The SDK does not retry control-plane ops, so we
+        // do it here. We do NOT probe the read replica per-test: that would
+        // exceed the CI job timeout when many containers each need a 6-7 minute
+        // partition-routing warmup. The session-level warmup primes the data
+        // plane once; the SDK's per-request retry absorbs any residual 1013s.
+        var response = await EmulatorRetry.RunAsync(
+            () => _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props),
             $"CreateContainer({props.Id})", maxRetries: 30, maxBackoffSeconds: 15);
 
-        _session.ContainerCache.TryAdd(containerName, container);
-        return container;
+        _session.ContainerCache.TryAdd(containerName, response.Container);
+        return response.Container;
     }
 
     /// <summary>
@@ -120,33 +115,4 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
     // No per-test container deletion needed: containers are cached and deleted
     // at the end of the test run by EmulatorSession.
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-    /// <summary>
-    /// Writes and deletes one disposable document to confirm the container's
-    /// data plane is responding (covers the 404/1013 "Collection is not yet
-    /// available for read" window). Handles flat top-level partition key paths
-    /// and skips the probe for nested or hierarchical paths — those cases are
-    /// rare enough that the per-test SDK retry still absorbs the warmup window.
-    /// </summary>
-    private static async Task ProbeDataPlaneAsync(Container container, ContainerProperties props)
-    {
-        var paths = props.PartitionKeyPaths is { Count: > 0 } ? props.PartitionKeyPaths : new[] { props.PartitionKeyPath };
-        if (paths.Any(p => string.IsNullOrEmpty(p) || p.Count(c => c == '/') > 1))
-            return; // Nested or empty — skip probe rather than risk PK mismatch.
-
-        var probeId = $"__warmup__{Guid.NewGuid():N}";
-        var doc = new JObject { ["id"] = probeId };
-        var pkBuilder = new PartitionKeyBuilder();
-        foreach (var path in paths)
-        {
-            var prop = path.TrimStart('/');
-            doc[prop] = probeId;
-            pkBuilder.Add(probeId);
-        }
-        var pk = pkBuilder.Build();
-
-        await container.UpsertItemAsync<JObject>(doc, pk);
-        try { await container.DeleteItemAsync<object>(probeId, pk); }
-        catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { }
-    }
 }
