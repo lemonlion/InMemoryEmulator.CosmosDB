@@ -242,7 +242,7 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
         return expr switch
         {
             FunctionCallExpression func =>
-                func.FunctionName.ToUpperInvariant() is "COUNT" or "SUM" or "MIN" or "MAX" or "AVG"
+                func.FunctionName.ToUpperInvariant() is "COUNT" or "COUNTIF" or "SUM" or "MIN" or "MAX" or "AVG"
                 || func.Arguments.Any(ContainsAggregate),
             BinaryExpression bin => ContainsAggregate(bin.Left) || ContainsAggregate(bin.Right),
             UnaryExpression unary => ContainsAggregate(unary.Operand),
