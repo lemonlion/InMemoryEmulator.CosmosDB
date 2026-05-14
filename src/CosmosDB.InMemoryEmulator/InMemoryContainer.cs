@@ -5298,6 +5298,12 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 {
                     resultObj[outputName] = items.Count;
                 }
+                else if (field.SqlExpr is FunctionCallExpression countFunc && countFunc.Arguments.Length > 0)
+                {
+                    resultObj[outputName] = CountDefinedResults(
+                        countFunc.Arguments[0], items, parsed.FromAlias,
+                        parameters ?? new Dictionary<string, object>());
+                }
                 else
                 {
                     var countPath = innerArg;
