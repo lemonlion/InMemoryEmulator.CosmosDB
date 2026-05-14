@@ -4669,6 +4669,29 @@ internal class InMemoryContainer : Container, IContainerTestSetup
            arg.Contains('/') || arg.Contains('%') ||
            (arg.Contains('-') && !arg.StartsWith("-") && arg.IndexOf('-') != arg.IndexOf(".") + 1);
 
+    /// <summary>
+    /// Counts items for which <paramref name="innerExpr"/> evaluates to a defined,
+    /// non-null value. Matches Cosmos DB <c>COUNT(expr)</c> semantics: rows producing
+    /// <c>undefined</c> or <c>null</c> are excluded.
+    /// </summary>
+    private static int CountDefinedResults(
+        SqlExpression innerExpr, List<string> items, string fromAlias, IDictionary<string, object> parameters)
+    {
+        var count = 0;
+        foreach (var json in items)
+        {
+            var jObj = JsonParseHelpers.ParseJson(json);
+            var result = EvaluateSqlExpression(innerExpr, jObj, fromAlias,
+                parameters ?? new Dictionary<string, object>());
+            if (result is null or UndefinedValue)
+                continue;
+            if (result is JToken jt && jt.Type == JTokenType.Null)
+                continue;
+            count++;
+        }
+        return count;
+    }
+
     private static List<double> ExtractNumericValues(IEnumerable<string> items, string innerArg, string fromAlias, IDictionary<string, object> parameters = null)
     {
         var values = new List<double>();
@@ -4870,6 +4893,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 EvaluateHavingAggregate(func, groupItems, fromAlias, parameters),
             BinaryExpression bin => EvaluateHavingBinaryExpression(bin, groupItems, resultObj, fromAlias, parameters),
             LiteralExpression lit => lit.Value,
+            UndefinedLiteralExpression => UndefinedValue.Instance,
             IdentifierExpression ident => ResolveValue(ident.Name, resultObj, fromAlias, parameters),
             _ => EvaluateSqlExpression(expr, resultObj, fromAlias, parameters)
         };
@@ -5358,12 +5382,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 return func.FunctionName.ToUpperInvariant() switch
                 {
                     "COUNT" when innerArg is "1" or "*" => (object)items.Count,
-                    "COUNT" => items.Count(json =>
-                    {
-                        var jObj = JsonParseHelpers.ParseJson(json);
-                        var path = StripAliasPrefix(innerArg, fromAlias);
-                        return jObj.SelectToken(path) is JToken t && t.Type != JTokenType.Null;
-                    }),
+                    "COUNT" => (object)CountDefinedResults(func.Arguments[0], items, fromAlias, parameters),
                     // Ref: https://github.com/Azure/azure-cosmos-dotnet-v3/pull/4738
                     //   COUNTIF(<bool_expr>) counts items where the expression evaluates to true.
                     "COUNTIF" => (object)EvaluateCountIf(func, items, fromAlias, parameters),
@@ -6213,6 +6232,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         return expr switch
         {
             LiteralExpression lit => lit.Value,
+            UndefinedLiteralExpression => UndefinedValue.Instance,
             IdentifierExpression ident => ResolveValue(ident.Name, item, fromAlias, parameters),
             ParameterExpression param => parameters.TryGetValue(param.Name, out var v) ? UnwrapJToken(v) : null,
             FunctionCallExpression func => EvaluateSqlFunction(func, item, fromAlias, parameters),
