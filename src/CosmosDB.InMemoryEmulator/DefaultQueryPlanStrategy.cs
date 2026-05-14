@@ -142,14 +142,20 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
             queryInfo["hasSelectValue"] = true;
         }
 
-        // Suppress SDK pipeline for GROUP BY, multi-aggregate, and VALUE aggregate queries
+        // Suppress SDK pipeline for GROUP BY, multi-aggregate, and VALUE aggregate
+        // queries. Also bypass any query referencing COUNTIF — the SDK pipeline
+        // doesn't recognize COUNTIF and tries to apply its built-in aggregate
+        // accumulator, which expects a {payload: {alias: {item: value}}} envelope
+        // the handler only produces for GROUP BY responses.
         var isGroupByBypass = parsed.GroupByFields is { Length: > 0 };
         var aggregateFieldCount = parsed.SelectFields.Count(f => ContainsAggregate(f.SqlExpr));
         var isMultiAggregateBypass = !isGroupByBypass && !parsed.IsValueSelect
             && (aggregateFieldCount > 1 || aggregates.Count > 1);
         var isValueAggregateBypass = !isGroupByBypass && parsed.IsValueSelect && aggregateFieldCount > 0;
+        var isCountIfBypass = !isGroupByBypass
+            && parsed.SelectFields.Any(f => ContainsCountIf(f.SqlExpr));
 
-        if (isGroupByBypass || isMultiAggregateBypass || isValueAggregateBypass)
+        if (isGroupByBypass || isMultiAggregateBypass || isValueAggregateBypass || isCountIfBypass)
         {
             queryInfo["groupByExpressions"] = new JArray();
             queryInfo["groupByAliases"] = new JArray();
@@ -248,6 +254,21 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
             UnaryExpression unary => ContainsAggregate(unary.Operand),
             TernaryExpression ternary => ContainsAggregate(ternary.Condition) || ContainsAggregate(ternary.IfTrue) || ContainsAggregate(ternary.IfFalse),
             CoalesceExpression coalesce => ContainsAggregate(coalesce.Left) || ContainsAggregate(coalesce.Right),
+            _ => false
+        };
+    }
+
+    private static bool ContainsCountIf(SqlExpression? expr)
+    {
+        return expr switch
+        {
+            FunctionCallExpression func =>
+                func.FunctionName.Equals("COUNTIF", StringComparison.OrdinalIgnoreCase)
+                || func.Arguments.Any(ContainsCountIf),
+            BinaryExpression bin => ContainsCountIf(bin.Left) || ContainsCountIf(bin.Right),
+            UnaryExpression unary => ContainsCountIf(unary.Operand),
+            TernaryExpression ternary => ContainsCountIf(ternary.Condition) || ContainsCountIf(ternary.IfTrue) || ContainsCountIf(ternary.IfFalse),
+            CoalesceExpression coalesce => ContainsCountIf(coalesce.Left) || ContainsCountIf(coalesce.Right),
             _ => false
         };
     }
