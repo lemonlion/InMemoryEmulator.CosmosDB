@@ -65,11 +65,7 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
             async () =>
             {
                 var resp = await _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props);
-                var probeId = $"__warmup__{Guid.NewGuid():N}";
-                await resp.Container.UpsertItemAsync(
-                    new { id = probeId, __pk = probeId }, new PartitionKey(probeId));
-                try { await resp.Container.DeleteItemAsync<object>(probeId, new PartitionKey(probeId)); }
-                catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { }
+                await ProbeDataPlaneAsync(resp.Container, props);
                 return resp.Container;
             },
             $"CreateContainer({props.Id})", maxRetries: 30, maxBackoffSeconds: 15);
@@ -124,4 +120,33 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
     // No per-test container deletion needed: containers are cached and deleted
     // at the end of the test run by EmulatorSession.
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    /// <summary>
+    /// Writes and deletes one disposable document to confirm the container's
+    /// data plane is responding (covers the 404/1013 "Collection is not yet
+    /// available for read" window). Handles flat top-level partition key paths
+    /// and skips the probe for nested or hierarchical paths — those cases are
+    /// rare enough that the per-test SDK retry still absorbs the warmup window.
+    /// </summary>
+    private static async Task ProbeDataPlaneAsync(Container container, ContainerProperties props)
+    {
+        var paths = props.PartitionKeyPaths is { Count: > 0 } ? props.PartitionKeyPaths : new[] { props.PartitionKeyPath };
+        if (paths.Any(p => string.IsNullOrEmpty(p) || p.Count(c => c == '/') > 1))
+            return; // Nested or empty — skip probe rather than risk PK mismatch.
+
+        var probeId = $"__warmup__{Guid.NewGuid():N}";
+        var doc = new JObject { ["id"] = probeId };
+        var pkBuilder = new PartitionKeyBuilder();
+        foreach (var path in paths)
+        {
+            var prop = path.TrimStart('/');
+            doc[prop] = probeId;
+            pkBuilder.Add(probeId);
+        }
+        var pk = pkBuilder.Build();
+
+        await container.UpsertItemAsync<JObject>(doc, pk);
+        try { await container.DeleteItemAsync<object>(probeId, pk); }
+        catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { }
+    }
 }
