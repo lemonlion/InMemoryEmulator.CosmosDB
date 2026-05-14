@@ -57,13 +57,14 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
 
         // Partition services can return 503 when the emulator is still starting
         // up a new container. The SDK does not retry control-plane ops, so we
-        // do it here. We do NOT probe the read replica per-test: that would
-        // exceed the CI job timeout when many containers each need a 6-7 minute
-        // partition-routing warmup. The session-level warmup primes the data
-        // plane once; the SDK's per-request retry absorbs any residual 1013s.
+        // do it here with the default budget (10 retries × 10s backoff = ~75s).
+        // We deliberately don't extend the budget further: persistent 503s
+        // typically mean the emulator is genuinely overloaded, in which case
+        // bigger retries only push the job timeout past 45m without ever
+        // succeeding.
         var response = await EmulatorRetry.RunAsync(
             () => _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props),
-            $"CreateContainer({props.Id})", maxRetries: 30, maxBackoffSeconds: 15);
+            $"CreateContainer({props.Id})");
 
         _session.ContainerCache.TryAdd(containerName, response.Container);
         return response.Container;
