@@ -69,24 +69,27 @@ public sealed class EmulatorSession : IAsyncLifetime
         EmulatorDatabase = response.Database;
 
         // The Linux Docker emulator's HTTP listener accepts requests before its
-        // partition services are ready for writes — the first POST /dbs/{db}/colls
-        // can still return 503 / 1007 ("high demand in this region") for a minute
-        // or more after the database is reachable. Probe with a real container
-        // create+delete here so the partition services are warm before tests run,
-        // rather than burning a per-test retry budget on the cold start.
+        // partition services accept writes (503 / 1007), and a freshly-created
+        // container's partition routing can return 404 / 1013 ("Collection is
+        // not yet available for read") for tens of seconds after creation. Probe
+        // both planes here so per-test fixtures see a fully-warm emulator
+        // instead of burning their per-test retry budgets on the cold start.
         var probeName = $"warmup-{Guid.NewGuid():N}";
-        await EmulatorRetry.RunAsync(
-            () => EmulatorDatabase.CreateContainerIfNotExistsAsync(new ContainerProperties(probeName, "/id")),
-            "WarmupCreateContainer", maxRetries: 60, maxBackoffSeconds: 15);
-        try
-        {
-            await EmulatorDatabase.GetContainer(probeName).DeleteContainerAsync();
-        }
-        catch
-        {
-            // Best-effort — leftover probe container will be cleaned by the
-            // run's final DisposeAsync sweep if it stays in ContainerCache.
-        }
+        var probeContainer = await EmulatorRetry.RunAsync(
+            async () =>
+            {
+                var resp = await EmulatorDatabase.CreateContainerIfNotExistsAsync(
+                    new ContainerProperties(probeName, "/id"));
+                // Write + read against the new container to confirm the data
+                // plane is responsive — surfaces 404/1013 before tests start.
+                var probeDoc = new { id = "warmup", payload = "ok" };
+                await resp.Container.CreateItemAsync(probeDoc, new PartitionKey(probeDoc.id));
+                _ = await resp.Container.ReadItemAsync<object>(probeDoc.id, new PartitionKey(probeDoc.id));
+                return resp.Container;
+            },
+            "WarmupContainerCreateAndRead", maxRetries: 60, maxBackoffSeconds: 15);
+
+        try { await probeContainer.DeleteContainerAsync(); } catch { /* best-effort */ }
 
         Console.WriteLine("[EmulatorSession] Emulator database + partition services ready.");
     }
@@ -296,6 +299,11 @@ internal static class EmulatorRetry
         // can become reachable before its account is fully initialised. Retry until ready.
         CosmosException ce when ce.StatusCode == System.Net.HttpStatusCode.Forbidden
                               && ce.SubStatusCode == 1008 => true,
+        // 404/1013 = "Collection is not yet available for read" — partition routing for a
+        // freshly-created container is still propagating. Tightly scoped so it cannot mask
+        // a genuine "resource doesn't exist" failure (which is plain 404/0).
+        CosmosException ce when ce.StatusCode == System.Net.HttpStatusCode.NotFound
+                              && ce.SubStatusCode == 1013 => true,
         CosmosException ce => ce.StatusCode is
             System.Net.HttpStatusCode.ServiceUnavailable or
             System.Net.HttpStatusCode.InternalServerError or

@@ -56,15 +56,24 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
         configure?.Invoke(props);
 
         // Partition services can return 503 when the emulator is still starting
-        // up a new container. The SDK does not retry those automatically for
-        // control-plane ops, so we do it here. Use the same generous budget as
-        // the session-level warmup — on cold CI runners the Linux Docker
-        // emulator can take well over a minute to accept writes.
-        var response = await EmulatorRetry.RunAsync(
-            () => _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props),
+        // up a new container, and a freshly-created container's first read can
+        // return 404 / 1013 ("Collection is not yet available for read") until
+        // partition routing settles. Both are tagged transient in EmulatorRetry,
+        // so we probe both planes inside one retry — only return a container
+        // that is genuinely usable for tests.
+        var container = await EmulatorRetry.RunAsync(
+            async () =>
+            {
+                var resp = await _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props);
+                var probeId = $"__warmup__{Guid.NewGuid():N}";
+                await resp.Container.UpsertItemAsync(
+                    new { id = probeId, __pk = probeId }, new PartitionKey(probeId));
+                try { await resp.Container.DeleteItemAsync<object>(probeId, new PartitionKey(probeId)); }
+                catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.NotFound) { }
+                return resp.Container;
+            },
             $"CreateContainer({props.Id})", maxRetries: 30, maxBackoffSeconds: 15);
 
-        var container = response.Container;
         _session.ContainerCache.TryAdd(containerName, container);
         return container;
     }
