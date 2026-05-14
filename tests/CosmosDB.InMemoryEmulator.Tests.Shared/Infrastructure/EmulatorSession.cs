@@ -62,33 +62,17 @@ public sealed class EmulatorSession : IAsyncLifetime
 
         Console.WriteLine("[EmulatorSession] Warming up emulator write path...");
 
+        // The container-creation retry in EmulatorTestFixture handles 503s from
+        // partition services that are still coming up, so we just need the
+        // database itself here — no probe write / read needed. (A throwaway
+        // probe container churns the emulator's partition budget and breaks
+        // tests that legitimately need 2+ containers.)
         var response = await EmulatorRetry.RunAsync(
             () => EmulatorClient.CreateDatabaseIfNotExistsAsync(DatabaseName),
             "CreateDatabase", maxRetries: 30, maxBackoffSeconds: 15);
 
         EmulatorDatabase = response.Database;
-
-        // The Linux Docker emulator's HTTP listener accepts requests before its
-        // partition services accept writes (503 / 1007). Probe the write plane
-        // here so per-test fixtures see at least a write-ready emulator. We do
-        // NOT probe the read replica — that can lag the write replica by 6-7
-        // minutes per fresh container on the Docker emulator, which exceeds
-        // a viable retry budget for every test class.
-        var probeName = $"warmup-{Guid.NewGuid():N}";
-        var probeContainer = await EmulatorRetry.RunAsync(
-            async () =>
-            {
-                var resp = await EmulatorDatabase.CreateContainerIfNotExistsAsync(
-                    new ContainerProperties(probeName, "/id"));
-                var probeDoc = new { id = "warmup", payload = "ok" };
-                await resp.Container.CreateItemAsync(probeDoc, new PartitionKey(probeDoc.id));
-                return resp.Container;
-            },
-            "WarmupContainerCreate", maxRetries: 60, maxBackoffSeconds: 15);
-
-        try { await probeContainer.DeleteContainerAsync(); } catch { /* best-effort */ }
-
-        Console.WriteLine("[EmulatorSession] Emulator database + partition services ready.");
+        Console.WriteLine("[EmulatorSession] Emulator database ready.");
     }
 
     public async ValueTask DisposeAsync()
