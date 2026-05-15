@@ -2,6 +2,11 @@
 
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
+		<!-- Override the repo-wide TargetFrameworks (net8.0;net10.0) with a single
+		     TFM. This is a CLI tool invoked from scripts/run-tests.ps1, not a library;
+		     `dotnet run` refuses ambiguous multi-target projects unless given an
+		     explicit framework arg. -->
+		<TargetFrameworks></TargetFrameworks>
 		<TargetFramework>net8.0</TargetFramework>
 		<RootNamespace>CosmosDB.InMemoryEmulator.Tools.EmulatorWarmup</RootNamespace>
 		<Nullable>enable</Nullable>
