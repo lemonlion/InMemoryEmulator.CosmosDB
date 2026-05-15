@@ -5,13 +5,17 @@ using Newtonsoft.Json.Linq;
 namespace CosmosDB.InMemoryEmulator.Tests.Infrastructure;
 
 /// <summary>
-/// Per-test-class fixture that creates real containers on the emulator shared
-/// via <see cref="EmulatorSession"/>. Containers are cached by name in the
-/// session for reuse across all tests in a class (and across classes that
-/// share the same container name). This avoids per-test container create/delete
-/// churn that exhausts the emulator's finite partition pool (PARTITION_COUNT).
-/// Containers are deleted once at the end of the test run in
-/// <see cref="EmulatorSession.DisposeAsync"/>.
+/// Per-test-class fixture that returns real <see cref="Container"/> references
+/// for the emulator-backed integration suite. Containers are NOT created lazily
+/// here — they are pre-created in bulk by <c>tests/EmulatorWarmup</c> before
+/// <c>dotnet test</c> starts (see <c>scripts/run-tests.ps1</c>). This keeps the
+/// emulator's 503/1007 + 404/1013 cold-start cost off the per-test path so test
+/// classes don't accumulate to the 45m CI job timeout.
+///
+/// Tests look up their container by name; the fixture refuses unknown names so a
+/// new test adding a container without registering it in
+/// <c>tests/emulator-containers.json</c> fails loudly instead of silently
+/// retrying through 503s.
 /// </summary>
 public sealed class EmulatorTestFixture : ITestContainerFixture
 {
@@ -32,39 +36,45 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
         string containerName,
         string partitionKeyPath,
         Action<ContainerProperties>? configure = null)
-        => CreateContainerCoreAsync(containerName, partitionKeyPath, name => new ContainerProperties(name, partitionKeyPath), configure);
+        => GetOrAssertAsync(containerName, new[] { partitionKeyPath });
 
     public Task<Container> CreateContainerAsync(
         string containerName,
         IReadOnlyList<string> partitionKeyPaths,
         Action<ContainerProperties>? configure = null)
-        => CreateContainerCoreAsync(containerName, partitionKeyPaths[0], name => new ContainerProperties(name, partitionKeyPaths), configure);
+        => GetOrAssertAsync(containerName, partitionKeyPaths);
 
-    private async Task<Container> CreateContainerCoreAsync(
-        string containerName, string partitionKeyPath,
-        Func<string, ContainerProperties> propsFactory, Action<ContainerProperties>? configure)
+    private async Task<Container> GetOrAssertAsync(
+        string containerName, IReadOnlyList<string> requestedPaths)
     {
-        // Reuse cached container if it already exists for this name.
-        // Clean any leftover documents from previous tests to maintain isolation.
-        if (_session.ContainerCache.TryGetValue(containerName, out var existing))
+        var spec = _session.Manifest.Get(containerName);
+        AssertPathsMatch(spec, requestedPaths);
+
+        if (!_session.ContainerCache.TryGetValue(containerName, out var existing))
         {
-            await CleanContainerAsync(existing, partitionKeyPath);
-            return existing;
+            // The warmup tool should have created this; if it isn't in the cache
+            // something has gone wrong with the run-tests.ps1 warmup step.
+            throw new InvalidOperationException(
+                $"Container '{containerName}' is in the manifest but was not pre-created. " +
+                "Check that scripts/run-tests.ps1 invoked tests/EmulatorWarmup before tests started.");
         }
 
-        var props = propsFactory(containerName);
-        configure?.Invoke(props);
+        await CleanContainerAsync(existing, spec.Paths[0]);
+        return existing;
+    }
 
-        // Partition services can return 503 when the emulator is still starting
-        // up a new container. The SDK does not retry those automatically for
-        // control-plane ops, so we do it here.
-        var response = await EmulatorRetry.RunAsync(
-            () => _session.EmulatorDatabase!.CreateContainerIfNotExistsAsync(props),
-            $"CreateContainer({props.Id})");
-
-        var container = response.Container;
-        _session.ContainerCache.TryAdd(containerName, container);
-        return container;
+    private static void AssertPathsMatch(EmulatorContainerSpec spec, IReadOnlyList<string> requested)
+    {
+        var manifestPaths = spec.Paths;
+        if (manifestPaths.Count != requested.Count
+            || !manifestPaths.SequenceEqual(requested, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Container '{spec.Name}' partition key path mismatch. " +
+                $"Manifest: [{string.Join(", ", manifestPaths)}]. " +
+                $"Test requested: [{string.Join(", ", requested)}]. " +
+                "Update tests/emulator-containers.json or the test to agree.");
+        }
     }
 
     /// <summary>
@@ -110,7 +120,7 @@ public sealed class EmulatorTestFixture : ITestContainerFixture
         }
     }
 
-    // No per-test container deletion needed: containers are cached and deleted
-    // at the end of the test run by EmulatorSession.
+    // No per-test container deletion needed: containers are managed by the
+    // warmup tool and cleaned at the end of the test run by EmulatorSession.
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

@@ -43,6 +43,13 @@ public sealed class EmulatorSession : IAsyncLifetime
     public CosmosClient? EmulatorClient { get; private set; }
     public Database? EmulatorDatabase { get; private set; }
 
+    /// <summary>
+    /// The container manifest read at session init. Source of truth for which
+    /// containers exist on the emulator. Empty manifest stub for in-memory runs.
+    /// </summary>
+    internal EmulatorContainerManifest Manifest { get; private set; } =
+        new(Array.Empty<EmulatorContainerSpec>());
+
     public EmulatorSession()
     {
         Target = Environment.GetEnvironmentVariable("COSMOS_TEST_TARGET")?.ToLowerInvariant() switch
@@ -60,40 +67,37 @@ public sealed class EmulatorSession : IAsyncLifetime
 
         EmulatorClient = CreateEmulatorClient(Endpoint, _httpGate);
 
-        Console.WriteLine("[EmulatorSession] Warming up emulator write path...");
-
-        // The container-creation retry in EmulatorTestFixture handles 503s from
-        // partition services that are still coming up, so we just need the
-        // database itself here — no probe write / read needed.
+        // Database must already exist (warmup tool creates it). CreateIfNotExists
+        // is idempotent so this is cheap when the warmup already ran; useful safety
+        // net for local runs where someone forgot to invoke the warmup first.
         var response = await EmulatorRetry.RunAsync(
             () => EmulatorClient.CreateDatabaseIfNotExistsAsync(DatabaseName),
             "CreateDatabase", maxRetries: 30, maxBackoffSeconds: 15);
-
         EmulatorDatabase = response.Database;
-        Console.WriteLine("[EmulatorSession] Emulator database ready.");
+
+        // Load the manifest and populate ContainerCache with lazy SDK Container
+        // references — these don't talk to the emulator until used. Tests then
+        // look up by name; nothing is lazy-created.
+        var manifestPath = Environment.GetEnvironmentVariable("COSMOS_EMULATOR_MANIFEST")
+                           ?? EmulatorContainerManifest.ResolveDefaultPath();
+        Manifest = EmulatorContainerManifest.Load(manifestPath);
+        foreach (var spec in Manifest.Containers)
+        {
+            ContainerCache.TryAdd(spec.Name, EmulatorDatabase.GetContainer(spec.Name));
+        }
+        Console.WriteLine(
+            $"[EmulatorSession] Ready ({Manifest.Containers.Count} containers from manifest).");
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        // Clean up all cached containers at end of test run
-        if (EmulatorDatabase is not null)
-        {
-            foreach (var (name, _) in ContainerCache)
-            {
-                try
-                {
-                    await EmulatorDatabase.GetContainer(name).DeleteContainerAsync();
-                }
-                catch
-                {
-                    // Best-effort cleanup — container may already be gone.
-                }
-            }
-            ContainerCache.Clear();
-        }
-
+        // Containers are not deleted here — the warmup tool creates them; CI
+        // emulators are ephemeral and torn down with the runner. Local dev
+        // emulators benefit from cached partitions across re-runs.
+        ContainerCache.Clear();
         EmulatorClient?.Dispose();
         _httpGate.Dispose();
+        return ValueTask.CompletedTask;
     }
 
     private static CosmosClient CreateEmulatorClient(string endpoint, SemaphoreSlim httpGate)

@@ -64,6 +64,27 @@ if ($Filter) {
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 
+# Pre-create every emulator-backed test container so the 503/1007 ("high demand in
+# this region") and 404/1013 ("collection is not yet available for read") warmup
+# window is absorbed once here instead of being charged to per-test fixtures.
+# Without this, every test class that creates a container can wait minutes for the
+# emulator's partition services + read replica to come online — fast tests stack
+# up to the 45m CI job timeout. We only need this when integration tests are about
+# to run against a real emulator.
+$needsIntegrationWarmup = ($Target -ne 'inmemory') -and ($Project -in @('integration', 'both'))
+if ($needsIntegrationWarmup) {
+    $manifestPath = Join-Path $PSScriptRoot '..' 'tests' 'emulator-containers.json'
+    $warmupProject = Join-Path $PSScriptRoot '..' 'tests' 'EmulatorWarmup'
+    Write-Host "`nPre-creating emulator containers from manifest..." -ForegroundColor Cyan
+    # `dotnet run` self-builds if needed — the warmup tool isn't in the solution,
+    # so it's not covered by the workflow's solution-level build step.
+    & dotnet run --project $warmupProject --configuration Release -- $manifestPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Emulator warmup failed with exit code $LASTEXITCODE" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+}
+
 # Determine which projects to run
 $projects = switch ($Project) {
     'unit'        { @(@{ Path = 'tests/CosmosDB.InMemoryEmulator.Tests.Unit';        Label = 'unit' }) }
