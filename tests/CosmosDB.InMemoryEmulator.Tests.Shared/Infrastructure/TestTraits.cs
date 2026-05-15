@@ -17,4 +17,13 @@ public static class TestTraits
 
     /// <summary>Documents a known divergence between in-memory and emulator.</summary>
     public const string KnownDivergence = "KnownDivergence";
+
+    /// <summary>
+    /// Test is reproducibly flaky against the Linux Docker / Windows Cosmos DB
+    /// emulators due to emulator-side instability (typically 503 responses where
+    /// the in-memory backend returns the expected status). Excluded from
+    /// emulator-target runs in scripts/run-tests.ps1 to keep CI signal clean.
+    /// In-memory runs are unaffected — these tests still validate behaviour there.
+    /// </summary>
+    public const string EmulatorFlaky = "EmulatorFlaky";
 }
