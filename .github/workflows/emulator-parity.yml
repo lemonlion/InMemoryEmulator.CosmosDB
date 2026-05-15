@@ -59,7 +59,7 @@ jobs:
           - 8081:8081
           - 10250-10256:10250-10256
         env:
-          AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 10
+          AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 30
           AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "false"
           AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE: "127.0.0.1"
 
@@ -100,7 +100,7 @@ jobs:
             Write-Error "Cosmos DB Emulator not found on runner image"
             exit 1
           }
-          Start-Process -FilePath $emulatorExe -ArgumentList "/NoExplorer /NoFirewall /PartitionCount=3"
+          Start-Process -FilePath $emulatorExe -ArgumentList "/NoExplorer /NoFirewall /PartitionCount=30"
 
       - uses: ./.github/actions/wait-for-emulator
 

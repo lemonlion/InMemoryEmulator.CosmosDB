@@ -33,7 +33,7 @@ jobs:
             Write-Error "Cosmos DB Emulator not found on runner image"
             exit 1
           }
-          Start-Process -FilePath $emulatorExe -ArgumentList "/NoExplorer /NoFirewall /PartitionCount=3"
+          Start-Process -FilePath $emulatorExe -ArgumentList "/NoExplorer /NoFirewall /PartitionCount=30"
 
       - uses: ./.github/actions/wait-for-emulator
 
