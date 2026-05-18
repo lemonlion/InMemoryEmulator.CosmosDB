@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.18] - 2026-05-15
+
+### Fixed
+- `COUNT(expr)` with nested ternary expressions no longer miscounts documents (Issue #64). `ExprToString` in `CosmosSqlParser` did not parenthesise ternary/coalesce sub-expressions when they appeared as operands of higher-precedence binary operators. When the SDK's transformed query was round-tripped through `SimplifySdkQuery`, the missing parentheses caused re-parsing to produce a different AST — e.g. `(innerTernary > 0) ? 1 : undefined` became `innerTernary ? val : (otherVal > 0 ? 1 : undefined)` — making `COUNT` evaluate the wrong condition. The fix wraps ternary and coalesce expressions in parentheses whenever they appear inside binary, unary, BETWEEN, IN, or LIKE operators.
+
 ## [4.0.17] - 2026-05-14
 
 ### Fixed
