@@ -1,0 +1,26 @@
+{
+  "$comment": "Pre-create manifest for emulator-backed integration tests. Each entry creates one container in the 'parity-validation' database before tests run, so the 503/1007 'high demand' and 404/1013 'not yet available for read' warmup window (which can take minutes on the Linux Docker / Windows emulators) is absorbed once per CI run instead of being charged to per-test fixtures. Tests look up their container by name via EmulatorTestFixture.CreateContainerAsync(name); the fixture validates the name is in this manifest and refuses to lazy-create containers not listed here (so a new test class adding a container without updating the manifest fails loudly).",
+  "containers": [
+    { "name": "test-crud", "partitionKeyPath": "/partitionKey" },
+    { "name": "containerB", "partitionKeyPath": "/partitionKey" },
+    { "name": "composite-test", "partitionKeyPaths": ["/tenantId", "/userId"] },
+    { "name": "pknone-test", "partitionKeyPath": "/partitionKey" },
+    { "name": "num-pk-test", "partitionKeyPath": "/numericPk" },
+    { "name": "bool-pk-test", "partitionKeyPath": "/boolPk" },
+    { "name": "test-batch", "partitionKeyPath": "/partitionKey" },
+    { "name": "test-bulk", "partitionKeyPath": "/partitionKey" },
+    { "name": "test-pk", "partitionKeyPath": "/partitionKey" },
+    { "name": "test-pk-mismatch", "partitionKeyPath": "/partitionKey" },
+    { "name": "test-linq", "partitionKeyPath": "/partitionKey" },
+    { "name": "test-query-adv", "partitionKeyPath": "/partitionKey" },
+    { "name": "test-ttl", "partitionKeyPath": "/partitionKey", "defaultTimeToLive": 2 },
+    { "name": "changefeed-processor", "partitionKeyPath": "/partitionKey" },
+    { "name": "harden-crud", "partitionKeyPath": "/partitionKey" },
+    { "name": "issue9-case", "partitionKeyPath": "/p" },
+    { "name": "issue18", "partitionKeyPath": "/pk" },
+    { "name": "issue18-edge", "partitionKeyPath": "/pk" },
+    { "name": "uk-nested", "partitionKeyPath": "/partitionKey", "uniqueKeyPaths": ["/nested/description"] },
+    { "name": "uk-nested-ok", "partitionKeyPath": "/partitionKey", "uniqueKeyPaths": ["/nested/description"] },
+    { "name": "uk-nested-xpk", "partitionKeyPath": "/partitionKey", "uniqueKeyPaths": ["/nested/description"] }
+  ]
+}

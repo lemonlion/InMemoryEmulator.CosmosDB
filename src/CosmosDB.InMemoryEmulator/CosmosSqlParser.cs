@@ -110,6 +110,13 @@ public abstract record SqlExpression;
 
 public sealed record LiteralExpression(object Value) : SqlExpression;
 
+/// <summary>
+/// Represents the Cosmos SQL <c>undefined</c> keyword. Distinguished from the
+/// string literal <c>'undefined'</c> so the evaluator can map it to the runtime
+/// undefined sentinel rather than a defined string value.
+/// </summary>
+public sealed record UndefinedLiteralExpression : SqlExpression;
+
 public sealed record IdentifierExpression(string Name) : SqlExpression;
 
 public sealed record ParameterExpression(string Name) : SqlExpression;
@@ -446,7 +453,7 @@ public static class CosmosSqlParser
         Token.EqualTo(CosmosSqlToken.Null).Select(_ => (SqlExpression)new LiteralExpression(null));
 
     private static readonly TokenListParser<CosmosSqlToken, SqlExpression> UndefinedLiteral =
-        Token.EqualTo(CosmosSqlToken.Undefined).Select(_ => (SqlExpression)new LiteralExpression("undefined"));
+        Token.EqualTo(CosmosSqlToken.Undefined).Select(_ => (SqlExpression)new UndefinedLiteralExpression());
 
     private static readonly TokenListParser<CosmosSqlToken, SqlExpression> ParameterExpr =
         Token.EqualTo(CosmosSqlToken.Parameter)
@@ -1248,6 +1255,7 @@ public static class CosmosSqlParser
             LiteralExpression { Value: string s } => $"'{s}'",
             LiteralExpression { Value: bool b } => b ? "true" : "false",
             LiteralExpression lit => lit.Value?.ToString() ?? "null",
+            UndefinedLiteralExpression => "undefined",
             IdentifierExpression ident => ident.Name,
             ParameterExpression param => param.Name,
             PropertyAccessExpression prop => $"{ExprToString(prop.Object)}.{prop.Property}",

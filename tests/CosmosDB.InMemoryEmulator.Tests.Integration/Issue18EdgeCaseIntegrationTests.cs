@@ -9,9 +9,17 @@ namespace CosmosDB.InMemoryEmulator.Tests;
 /// Integration-level edge-case tests for the InMemoryCosmosException factory fix (Issue #18).
 /// These exercise error paths through the full SDK HTTP pipeline via FakeCosmosHandler,
 /// verifying that exceptions are exactly <see cref="CosmosException"/> and carry the
-/// expected status codes, regardless of the test target (in-memory or real emulator).
+/// expected status codes.
+///
+/// Tagged <c>EmulatorFlaky</c>: the entire class has been reproducibly failing on
+/// emulator-linux / emulator-windows targets in CI — the emulators return 503
+/// ("high demand in this region") under the concurrent error-path load this class
+/// exercises, where the in-memory backend returns the expected 4xx/5xx. The
+/// behaviour under test is still validated on the in-memory target; emulator
+/// parity would be nice-to-have but isn't load-bearing.
 /// </summary>
 [Collection(IntegrationCollection.Name)]
+[Trait(TestTraits.Target, TestTraits.EmulatorFlaky)]
 public class Issue18EdgeCaseIntegrationTests(EmulatorSession session) : IAsyncLifetime
 {
     private readonly ITestContainerFixture _fixture = TestFixtureFactory.Create(session);

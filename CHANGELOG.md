@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.17] - 2026-05-14
+
+### Fixed
+- `COUNT(expr)` with a non-trivial inner expression no longer throws `Newtonsoft.Json.JsonException` (Issue #59). Previously the inner argument was stringified and handed to `JToken.SelectToken` as a JSONPath, which failed on anything beyond a trivial property path — including double-quoted bracket notation (`c.obj["value"]`, required for fields named with Cosmos SQL reserved words) when combined with comparison or ternary operators (e.g. `COUNT(c.amount["value"] > 0 ? 1 : undefined)`). `COUNT` now evaluates the inner expression per-item like `SUM`/`AVG` and counts rows whose result is defined and non-null, matching Cosmos DB semantics. The `undefined` keyword is also now distinguished from the string literal `'undefined'` so it correctly evaluates to the undefined sentinel.
+
 ## [4.0.16] - 2026-05-11
 
 ### Added
