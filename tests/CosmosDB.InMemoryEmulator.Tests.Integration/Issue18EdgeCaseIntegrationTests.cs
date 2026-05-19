@@ -11,15 +11,11 @@ namespace CosmosDB.InMemoryEmulator.Tests;
 /// verifying that exceptions are exactly <see cref="CosmosException"/> and carry the
 /// expected status codes.
 ///
-/// Tagged <c>EmulatorFlaky</c>: the entire class has been reproducibly failing on
-/// emulator-linux / emulator-windows targets in CI — the emulators return 503
-/// ("high demand in this region") under the concurrent error-path load this class
-/// exercises, where the in-memory backend returns the expected 4xx/5xx. The
-/// behaviour under test is still validated on the in-memory target; emulator
-/// parity would be nice-to-have but isn't load-bearing.
+/// The concurrent test uses adaptive concurrency: lower volume when targeting a real
+/// emulator to avoid overwhelming its partition service with 503 "high demand" errors,
+/// while still validating the same thread-safety behaviour.
 /// </summary>
 [Collection(IntegrationCollection.Name)]
-[Trait(TestTraits.Target, TestTraits.EmulatorFlaky)]
 public class Issue18EdgeCaseIntegrationTests(EmulatorSession session) : IAsyncLifetime
 {
     private readonly ITestContainerFixture _fixture = TestFixtureFactory.Create(session);
@@ -188,7 +184,10 @@ public class Issue18EdgeCaseIntegrationTests(EmulatorSession session) : IAsyncLi
     [Fact]
     public async Task ConcurrentReadsOfNonExistent_AllThrowCosmosException()
     {
-        const int concurrency = 50;
+        // Use lower concurrency on emulators to avoid overwhelming the partition
+        // service (503 "high demand in this region"). The behavioural assertion is
+        // the same — all reads of non-existent items throw CosmosException(404).
+        var concurrency = session.IsEmulator ? 10 : 50;
         var tasks = Enumerable.Range(0, concurrency).Select(async i =>
         {
             var ex = await Assert.ThrowsAsync<CosmosException>(async () =>

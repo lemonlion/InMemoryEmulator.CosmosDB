@@ -282,6 +282,10 @@ internal static class EmulatorRetry
         // can become reachable before its account is fully initialised. Retry until ready.
         CosmosException ce when ce.StatusCode == System.Net.HttpStatusCode.Forbidden
                               && ce.SubStatusCode == 1008 => true,
+        // 404/0 = Windows emulator intermediate startup state: HTTP server is reachable
+        // but internal metadata services haven't fully materialised yet.
+        CosmosException ce when ce.StatusCode == System.Net.HttpStatusCode.NotFound
+                              && ce.SubStatusCode == 0 => true,
         CosmosException ce => ce.StatusCode is
             System.Net.HttpStatusCode.ServiceUnavailable or
             System.Net.HttpStatusCode.InternalServerError or
