@@ -239,6 +239,10 @@ internal static class Program
         // 404/1013 — "Collection is not yet available for read".
         CosmosException ce when ce.StatusCode == HttpStatusCode.NotFound
                               && ce.SubStatusCode == 1013 => true,
+        // 404/0 — Windows emulator intermediate startup state: HTTP server is
+        // reachable but internal metadata services haven't fully materialised.
+        CosmosException ce when ce.StatusCode == HttpStatusCode.NotFound
+                              && ce.SubStatusCode == 0 => true,
         CosmosException ce => ce.StatusCode is
             HttpStatusCode.ServiceUnavailable or
             HttpStatusCode.InternalServerError or
