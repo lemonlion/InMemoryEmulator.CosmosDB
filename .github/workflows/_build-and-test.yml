@@ -85,3 +85,20 @@ jobs:
 
       - name: Integration Tests
         run: dotnet test tests/CosmosDB.InMemoryEmulator.Tests.Integration --configuration Release --no-build --verbosity normal --framework ${{ matrix.framework }}
+
+  test-integration-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [net8.0, net10.0]
+    name: integration-windows (${{ matrix.framework }})
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-dotnet-build
+        with:
+          build-args: --framework ${{ matrix.framework }}
+
+      - name: Integration Tests
+        shell: bash
+        run: dotnet test tests/CosmosDB.InMemoryEmulator.Tests.Integration --configuration Release --no-build --verbosity normal --framework ${{ matrix.framework }}
