@@ -5352,6 +5352,20 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 if (val is not null and not UndefinedValue)
                     resultObj[outputName] = val is JToken jt ? jt.DeepClone() : JToken.FromObject(val);
             }
+            // Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/query/select
+            //   "The SELECT clause supports arbitrary expressions including literal values."
+            // Handle non-aggregate, non-trivial expressions (literals, function calls, etc.)
+            // by evaluating the SqlExpr directly instead of treating as a property path.
+            else if (field.SqlExpr is not null and not IdentifierExpression)
+            {
+                var jObj = items.Count > 0 ? JsonParseHelpers.ParseJson(items[0]) : new JObject();
+                var val = EvaluateSqlExpression(field.SqlExpr, jObj, parsed.FromAlias,
+                    parameters ?? new Dictionary<string, object>());
+                if (val is not null and not UndefinedValue)
+                    resultObj[outputName] = val is JToken jt ? jt.DeepClone() : JToken.FromObject(val);
+                else if (val is null)
+                    resultObj[outputName] = JValue.CreateNull();
+            }
             else
             {
                 var path = field.Expression;
