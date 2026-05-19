@@ -1130,7 +1130,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             if (predicateParsed.Where is not null)
             {
                 var matches = EvaluateWhereExpression(predicateParsed.Where, jObj, predicateParsed.FromAlias,
-                    new Dictionary<string, object>(), null);
+                    new Dictionary<string, object>(), null, treatUndefinedAsNull: true);
                 if (!matches)
                 {
                     throw InMemoryCosmosException.Create("Precondition Failed",
@@ -1614,7 +1614,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             if (predicateParsed.Where is not null)
             {
                 var matches = EvaluateWhereExpression(predicateParsed.Where, jObj, predicateParsed.FromAlias,
-                    new Dictionary<string, object>(), null);
+                    new Dictionary<string, object>(), null, treatUndefinedAsNull: true);
                 if (!matches)
                 {
                     return CreateResponseMessage(HttpStatusCode.PreconditionFailed);
@@ -5543,17 +5543,17 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
     private static bool EvaluateWhereExpression(
         WhereExpression expression, JObject item, string fromAlias,
-        IDictionary<string, object> parameters, JoinClause join)
+        IDictionary<string, object> parameters, JoinClause join, bool treatUndefinedAsNull = false)
     {
         return expression switch
         {
-            ComparisonCondition c => EvaluateComparison(c, item, fromAlias, parameters),
-            AndCondition a => EvaluateWhereExpression(a.Left, item, fromAlias, parameters, join)
-                              && EvaluateWhereExpression(a.Right, item, fromAlias, parameters, join),
-            OrCondition o => EvaluateWhereExpression(o.Left, item, fromAlias, parameters, join)
-                             || EvaluateWhereExpression(o.Right, item, fromAlias, parameters, join),
-            NotCondition n => !EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join)
-                              && !EvaluateWhereExpression(n.Inner, item, fromAlias, parameters, join),
+            ComparisonCondition c => EvaluateComparison(c, item, fromAlias, parameters, treatUndefinedAsNull),
+            AndCondition a => EvaluateWhereExpression(a.Left, item, fromAlias, parameters, join, treatUndefinedAsNull)
+                              && EvaluateWhereExpression(a.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
+            OrCondition o => EvaluateWhereExpression(o.Left, item, fromAlias, parameters, join, treatUndefinedAsNull)
+                             || EvaluateWhereExpression(o.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
+            NotCondition n => !EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join, treatUndefinedAsNull)
+                              && !EvaluateWhereExpression(n.Inner, item, fromAlias, parameters, join, treatUndefinedAsNull),
             FunctionCondition f => EvaluateFunction(f, item, fromAlias, parameters),
             ExistsCondition e => EvaluateExists(e, item, fromAlias, parameters, join),
             SqlExpressionCondition s => IsTruthy(EvaluateSqlExpression(s.Expression, item, fromAlias, parameters)),
@@ -5562,10 +5562,20 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     }
 
     private static bool EvaluateComparison(
-        ComparisonCondition comparison, JObject item, string fromAlias, IDictionary<string, object> parameters)
+        ComparisonCondition comparison, JObject item, string fromAlias, IDictionary<string, object> parameters,
+        bool treatUndefinedAsNull = false)
     {
         var leftValue = ResolveValue(comparison.Left, item, fromAlias, parameters);
         var rightValue = ResolveValue(comparison.Right, item, fromAlias, parameters);
+
+        // Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/partial-document-update#filter-predicate
+        //   In FilterPredicate context, missing properties are treated as null.
+        if (treatUndefinedAsNull)
+        {
+            if (leftValue is UndefinedValue) leftValue = null;
+            if (rightValue is UndefinedValue) rightValue = null;
+        }
+
         if (leftValue is UndefinedValue || rightValue is UndefinedValue)
             return false;
         return comparison.Operator switch
@@ -5587,19 +5597,19 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     /// </summary>
     private static bool EvaluateWhereExpressionIncludesUndefined(
         WhereExpression expression, JObject item, string fromAlias,
-        IDictionary<string, object> parameters, JoinClause join)
+        IDictionary<string, object> parameters, JoinClause join, bool treatUndefinedAsNull = false)
     {
         return expression switch
         {
-            ComparisonCondition c => ComparisonIncludesUndefined(c, item, fromAlias, parameters),
+            ComparisonCondition c => ComparisonIncludesUndefined(c, item, fromAlias, parameters, treatUndefinedAsNull),
             AndCondition a =>
-                EvaluateWhereExpressionIncludesUndefined(a.Left, item, fromAlias, parameters, join) ||
-                EvaluateWhereExpressionIncludesUndefined(a.Right, item, fromAlias, parameters, join),
+                EvaluateWhereExpressionIncludesUndefined(a.Left, item, fromAlias, parameters, join, treatUndefinedAsNull) ||
+                EvaluateWhereExpressionIncludesUndefined(a.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
             OrCondition o =>
-                EvaluateWhereExpressionIncludesUndefined(o.Left, item, fromAlias, parameters, join) ||
-                EvaluateWhereExpressionIncludesUndefined(o.Right, item, fromAlias, parameters, join),
+                EvaluateWhereExpressionIncludesUndefined(o.Left, item, fromAlias, parameters, join, treatUndefinedAsNull) ||
+                EvaluateWhereExpressionIncludesUndefined(o.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
             NotCondition n =>
-                EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join),
+                EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join, treatUndefinedAsNull),
             SqlExpressionCondition s =>
                 EvaluateSqlExpression(s.Expression, item, fromAlias, parameters) is UndefinedValue,
             _ => false,
@@ -5609,12 +5619,22 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     /// <summary>
     /// Checks if a comparison involves undefined semantics. For most operators, only
     /// UndefinedValue counts. For LIKE, null also produces undefined (three-value logic).
+    /// When treatUndefinedAsNull is true, undefined is treated as null (FilterPredicate context).
     /// </summary>
     private static bool ComparisonIncludesUndefined(
-        ComparisonCondition c, JObject item, string fromAlias, IDictionary<string, object> parameters)
+        ComparisonCondition c, JObject item, string fromAlias, IDictionary<string, object> parameters,
+        bool treatUndefinedAsNull = false)
     {
         var left = ResolveValue(c.Left, item, fromAlias, parameters);
         var right = ResolveValue(c.Right, item, fromAlias, parameters);
+
+        // In FilterPredicate context, undefined is treated as null — not "undefined"
+        if (treatUndefinedAsNull)
+        {
+            if (left is UndefinedValue) left = null;
+            if (right is UndefinedValue) right = null;
+        }
+
         if (left is UndefinedValue || right is UndefinedValue)
             return true;
         // LIKE with null operand(s) produces undefined per three-value logic
