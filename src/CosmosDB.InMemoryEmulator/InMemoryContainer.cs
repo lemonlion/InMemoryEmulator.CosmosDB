@@ -74,6 +74,11 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), string> _items = new();
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), string> _etags = new();
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), DateTimeOffset> _timestamps = new();
+    // Ref: Observed behavior on Windows Cosmos DB Emulator — documents return in
+    //   insertion order when no ORDER BY is applied. Maintains creation-time ordering
+    //   so GetAllItemsForPartition can enumerate deterministically.
+    private readonly List<(string Id, string PartitionKey)> _insertionOrder = new();
+    private readonly object _insertionOrderLock = new();
     private readonly List<(DateTimeOffset Timestamp, string Id, string PartitionKey, string Json, bool IsDelete)> _changeFeed = new();
     private readonly object _changeFeedLock = new();
     private long _changeFeedLsnCounter;
@@ -357,6 +362,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.Clear();
         _etags.Clear();
         _timestamps.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
         lock (_changeFeedLock) { _changeFeed.Clear(); }
     }
 
@@ -402,9 +408,11 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     /// </summary>
     public string ExportState()
     {
-        var items = _items
-            .Where(kvp => !IsExpired(kvp.Key))
-            .Select(kvp => JsonParseHelpers.ParseJson(kvp.Value)).ToList();
+        List<(string Id, string PartitionKey)> orderedKeys;
+        lock (_insertionOrderLock) { orderedKeys = _insertionOrder.ToList(); }
+        var items = orderedKeys
+            .Where(key => _items.ContainsKey(key) && !IsExpired(key))
+            .Select(key => JsonParseHelpers.ParseJson(_items[key])).ToList();
         var state = new JObject { ["items"] = new JArray(items) };
         return state.ToString(Formatting.Indented);
     }
@@ -437,6 +445,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _etags[key] = importEtag;
             _timestamps[key] = DateTimeOffset.UtcNow;
             _items[key] = EnrichWithSystemProperties(itemJson, importEtag, _timestamps[key]);
+            lock (_insertionOrderLock) { _insertionOrder.Add(key); }
         }
     }
 
@@ -489,6 +498,25 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _etags.Clear();
         _timestamps.Clear();
         _itemLocks.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
+
+        // Rebuild insertion order from the change feed replay sequence.
+        // Track which keys were first created (not deleted) to preserve original insertion order.
+        var insertionOrderKeys = new List<(string Id, string PartitionKey)>();
+        foreach (var entry in feedSnapshot)
+        {
+            if (entry.IsDelete && entry.Json.Contains("\"_ttlEviction\":true", StringComparison.Ordinal))
+                continue;
+            var entryKey = (entry.Id, entry.PartitionKey);
+            if (entry.IsDelete)
+            {
+                insertionOrderKeys.Remove(entryKey);
+            }
+            else if (!insertionOrderKeys.Contains(entryKey))
+            {
+                insertionOrderKeys.Add(entryKey);
+            }
+        }
 
         foreach (var kvp in lastPerKey)
         {
@@ -499,6 +527,15 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items[key] = EnrichWithSystemProperties(kvp.Value.Json, etag, pointInTime);
             _etags[key] = etag;
             _timestamps[key] = pointInTime;
+        }
+
+        lock (_insertionOrderLock)
+        {
+            foreach (var key in insertionOrderKeys)
+            {
+                if (_items.ContainsKey(key))
+                    _insertionOrder.Add(key);
+            }
         }
     }
 
@@ -738,6 +775,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            lock (_insertionOrderLock) { _insertionOrder.Add(key); }
             var etag = GenerateETag();
             _etags[key] = etag;
             _timestamps[key] = DateTimeOffset.UtcNow;
@@ -773,6 +811,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items.TryRemove(key, out _);
                 _etags.TryRemove(key, out _);
                 _timestamps.TryRemove(key, out _);
+                lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 throw;
             }
         }
@@ -867,6 +906,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            if (!existed) { lock (_insertionOrderLock) { _insertionOrder.Add(key); } }
 
             try
             {
@@ -893,6 +933,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     _items.TryRemove(key, out _);
                     _etags.TryRemove(key, out _);
                     _timestamps.TryRemove(key, out _);
+                    lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 }
                 throw;
             }
@@ -1045,6 +1086,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items.TryRemove(key, out _);
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
+            lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
 
             TrackBatchWrite(key);
             try
@@ -1057,6 +1099,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = existingJson;
                 if (previousEtag is not null) _etags[key] = previousEtag;
                 if (previousTimestamp.HasValue) _timestamps[key] = previousTimestamp.Value;
+                lock (_insertionOrderLock) { _insertionOrder.Add(key); }
                 throw;
             }
 
@@ -1236,6 +1279,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            lock (_insertionOrderLock) { _insertionOrder.Add(key); }
             var etag = GenerateETag();
             _etags[key] = etag;
             _timestamps[key] = DateTimeOffset.UtcNow;
@@ -1252,6 +1296,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items.TryRemove(key, out _);
                 _etags.TryRemove(key, out _);
                 _timestamps.TryRemove(key, out _);
+                lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 throw;
             }
 
@@ -1360,6 +1405,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            if (!existed) { lock (_insertionOrderLock) { _insertionOrder.Add(key); } }
             try
             {
                 ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(enrichedJson), "Upsert");
@@ -1378,6 +1424,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     _items.TryRemove(key, out _);
                     _etags.TryRemove(key, out _);
                     _timestamps.TryRemove(key, out _);
+                    lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 }
                 throw;
             }
@@ -1525,6 +1572,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items.TryRemove(key, out _);
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
+            lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
 
             TrackBatchWrite(key);
             try
@@ -1537,6 +1585,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = existingJson;
                 if (previousEtag is not null) _etags[key] = previousEtag;
                 if (previousTimestamp.HasValue) _timestamps[key] = previousTimestamp.Value;
+                lock (_insertionOrderLock) { _insertionOrder.Add(key); }
                 throw;
             }
 
@@ -2364,6 +2413,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.Clear();
         _etags.Clear();
         _timestamps.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
         lock (_changeFeedLock) { _changeFeed.Clear(); }
         _storedProcedures.Clear();
         _userDefinedFunctions.Clear();
@@ -2386,6 +2436,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.Clear();
         _etags.Clear();
         _timestamps.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
         lock (_changeFeedLock) { _changeFeed.Clear(); }
         _storedProcedures.Clear();
         _userDefinedFunctions.Clear();
@@ -2449,6 +2500,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items.TryRemove(key, out _);
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
+            lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
             RecordDeleteTombstone(key.Id, pk, partitionKey);
         }
         return Task.FromResult(CreateResponseMessage(HttpStatusCode.OK));
@@ -3408,6 +3460,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.TryRemove(key, out _);
         _etags.TryRemove(key, out _);
         _timestamps.TryRemove(key, out _);
+        lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
 
         // Record a delete tombstone in the change feed so consumers see TTL evictions
         RecordDeleteTombstone(key.Id, key.PartitionKey, isTtlEviction: true);
@@ -3467,6 +3520,27 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items.TryRemove(key, out _);
                 _etags.TryRemove(key, out _);
                 _timestamps.TryRemove(key, out _);
+                lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
+            }
+        }
+
+        // Restore insertion order for keys that were newly added during the batch
+        // but didn't exist in the snapshot — they need to be removed from insertion order.
+        // Keys that existed in the snapshot should already be in insertion order.
+        lock (_insertionOrderLock)
+        {
+            foreach (var key in touchedKeys)
+            {
+                if (!itemsSnapshot.ContainsKey(key))
+                {
+                    // Already removed above
+                }
+                else if (!_insertionOrder.Contains(key))
+                {
+                    // Item existed in snapshot but is missing from insertion order
+                    // (shouldn't normally happen, but be safe)
+                    _insertionOrder.Add(key);
+                }
             }
         }
 
@@ -4061,8 +4135,16 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     //  Private helpers — Query execution pipeline
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // Ref: Observed behavior on the Windows Cosmos DB Emulator (priority 6):
+    //   Documents returned by queries without ORDER BY are in insertion order.
     private IEnumerable<string> GetAllItemsForPartition(QueryRequestOptions requestOptions)
     {
+        List<(string Id, string PartitionKey)> orderedKeys;
+        lock (_insertionOrderLock)
+        {
+            orderedKeys = _insertionOrder.ToList();
+        }
+
         if (requestOptions?.PartitionKey is not null
             && requestOptions.PartitionKey != PartitionKey.None)
         {
@@ -4076,15 +4158,19 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 if (queryComponents > 0 && queryComponents < PartitionKeyPaths.Count)
                 {
                     var prefix = pk + "|";
-                    return _items
-                        .Where(kvp => (kvp.Key.PartitionKey?.StartsWith(prefix, StringComparison.Ordinal) ?? false) && !IsExpired(kvp.Key))
-                        .Select(kvp => kvp.Value);
+                    return orderedKeys
+                        .Where(key => (key.PartitionKey?.StartsWith(prefix, StringComparison.Ordinal) ?? false) && !IsExpired(key) && _items.ContainsKey(key))
+                        .Select(key => _items[key]);
                 }
             }
 
-            return _items.Where(kvp => kvp.Key.PartitionKey == pk && !IsExpired(kvp.Key)).Select(kvp => kvp.Value);
+            return orderedKeys
+                .Where(key => key.PartitionKey == pk && !IsExpired(key) && _items.ContainsKey(key))
+                .Select(key => _items[key]);
         }
-        return _items.Where(kvp => !IsExpired(kvp.Key)).Select(kvp => kvp.Value);
+        return orderedKeys
+            .Where(key => !IsExpired(key) && _items.ContainsKey(key))
+            .Select(key => _items[key]);
     }
 
     private static int CountPartitionKeyComponents(PartitionKey partitionKey)
