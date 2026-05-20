@@ -5,11 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.18] - 2026-05-19
+## [4.0.20] - 2026-05-20
 
 ### Fixed
 - `COUNT(expr)` with nested ternary expressions no longer miscounts documents (Issue #64). `ExprToString` in `CosmosSqlParser` did not parenthesise ternary/coalesce sub-expressions when they appeared as operands of higher-precedence binary operators. When the SDK's transformed query was round-tripped through `SimplifySdkQuery`, the missing parentheses caused re-parsing to produce a different AST — e.g. `(innerTernary > 0) ? 1 : undefined` became `innerTernary ? val : (otherVal > 0 ? 1 : undefined)` — making `COUNT` evaluate the wrong condition. The fix wraps ternary and coalesce expressions in parentheses whenever they appear inside binary, unary, BETWEEN, IN, or LIKE operators.
+- String literal aliases in aggregate queries (e.g. `SELECT 'Settlement' AS Label, COUNT(1) AS ItemCount FROM c`) no longer return `null` on Linux (Issue #67). `ProjectAggregateFields` now evaluates literal/expression fields via `EvaluateSqlExpression` instead of treating them as property paths. `DefaultQueryPlanStrategy` also bypasses the SDK aggregate pipeline when literals appear alongside aggregates.
+- Patch operations with filter predicates referencing non-existent properties no longer throw (Issue #70). Missing properties are now treated as `null` in `FilterPredicate` evaluation, matching real Cosmos DB behavior.
 - Queries without `ORDER BY` now return documents in insertion order, matching real Cosmos DB behavior (Issue #72). Previously documents were returned in hash-map order due to `ConcurrentDictionary` enumeration. Added insertion-order tracking to `InMemoryContainer` that maintains document position across create, replace, upsert, and delete operations.
+
+### Changed
+- Removed `EmulatorFlaky` trait. The single flaky test (`ConcurrentReadsOfNonExistent`) now uses adaptive concurrency — 50 parallel reads for in-memory, 10 for emulator targets — eliminating the need for blanket test exclusions.
+
+### CI
+- Integration tests now run on **both** `ubuntu-latest` and `windows-latest` to catch platform-specific divergences (e.g. ServiceInterop vs non-ServiceInterop code paths).
 
 ## [4.0.17] - 2026-05-14
 
