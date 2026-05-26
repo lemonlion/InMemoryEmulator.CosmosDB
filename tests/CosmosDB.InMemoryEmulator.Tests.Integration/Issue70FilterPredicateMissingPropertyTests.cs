@@ -24,134 +24,134 @@ namespace CosmosDB.InMemoryEmulator.Tests;
 /// </summary>
 public class Issue70FilterPredicateMissingPropertyTests : IAsyncLifetime
 {
-    private InMemoryCosmosResult _cosmos = null!;
-    private Container _container = null!;
+	private InMemoryCosmosResult _cosmos = null!;
+	private Container _container = null!;
 
-    public ValueTask InitializeAsync()
-    {
-        _cosmos = InMemoryCosmos.Create("issue70", "/partitionKey",
-            configureOptions: opts => opts.Serializer = new CosmosJsonDotNetSerializer(new JsonSerializerSettings
-            {
-                ContractResolver = new DefaultContractResolver
-                {
-                    NamingStrategy = new CamelCaseNamingStrategy()
-                },
-                NullValueHandling = NullValueHandling.Ignore
-            }));
-        _container = _cosmos.Container;
-        return ValueTask.CompletedTask;
-    }
+	public ValueTask InitializeAsync()
+	{
+		_cosmos = InMemoryCosmos.Create("issue70", "/partitionKey",
+			configureOptions: opts => opts.Serializer = new CosmosJsonDotNetSerializer(new JsonSerializerSettings
+			{
+				ContractResolver = new DefaultContractResolver
+				{
+					NamingStrategy = new CamelCaseNamingStrategy()
+				},
+				NullValueHandling = NullValueHandling.Ignore
+			}));
+		_container = _cosmos.Container;
+		return ValueTask.CompletedTask;
+	}
 
-    public ValueTask DisposeAsync()
-    {
-        _cosmos.Dispose();
-        return ValueTask.CompletedTask;
-    }
+	public ValueTask DisposeAsync()
+	{
+		_cosmos.Dispose();
+		return ValueTask.CompletedTask;
+	}
 
-    [Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
-    [Fact]
-    public async Task PatchWithFilterPredicate_MissingPropertyEqualsNull_Succeeds()
-    {
-        // linkedId is null → will NOT be serialized due to NullValueHandling.Ignore
-        var document = new
-        {
-            id = Guid.NewGuid().ToString(),
-            partitionKey = "pk-1",
-            linkedId = (string?)null,
-            name = "test"
-        };
-        await _container.CreateItemAsync(document, new PartitionKey("pk-1"));
+	[Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
+	[Fact]
+	public async Task PatchWithFilterPredicate_MissingPropertyEqualsNull_Succeeds()
+	{
+		// linkedId is null → will NOT be serialized due to NullValueHandling.Ignore
+		var document = new
+		{
+			id = Guid.NewGuid().ToString(),
+			partitionKey = "pk-1",
+			linkedId = (string?)null,
+			name = "test"
+		};
+		await _container.CreateItemAsync(document, new PartitionKey("pk-1"));
 
-        // This FilterPredicate should match because the missing property should be treated as null
-        var patchOperations = new[] { PatchOperation.Set("/linkedId", Guid.NewGuid().ToString()) };
-        var options = new PatchItemRequestOptions
-        {
-            FilterPredicate = "FROM c WHERE c.linkedId = null"
-        };
+		// This FilterPredicate should match because the missing property should be treated as null
+		var patchOperations = new[] { PatchOperation.Set("/linkedId", Guid.NewGuid().ToString()) };
+		var options = new PatchItemRequestOptions
+		{
+			FilterPredicate = "FROM c WHERE c.linkedId = null"
+		};
 
-        var response = await _container.PatchItemAsync<dynamic>(
-            document.id, new PartitionKey("pk-1"), patchOperations, options);
+		var response = await _container.PatchItemAsync<dynamic>(
+			document.id, new PartitionKey("pk-1"), patchOperations, options);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-    }
+		response.StatusCode.Should().Be(HttpStatusCode.OK);
+	}
 
-    [Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
-    [Fact]
-    public async Task PatchWithFilterPredicate_MissingPropertyNotEqualNull_FailsPrecondition()
-    {
-        // linkedId is null → will NOT be serialized due to NullValueHandling.Ignore
-        var document = new
-        {
-            id = Guid.NewGuid().ToString(),
-            partitionKey = "pk-1",
-            linkedId = (string?)null,
-            name = "test"
-        };
-        await _container.CreateItemAsync(document, new PartitionKey("pk-1"));
+	[Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
+	[Fact]
+	public async Task PatchWithFilterPredicate_MissingPropertyNotEqualNull_FailsPrecondition()
+	{
+		// linkedId is null → will NOT be serialized due to NullValueHandling.Ignore
+		var document = new
+		{
+			id = Guid.NewGuid().ToString(),
+			partitionKey = "pk-1",
+			linkedId = (string?)null,
+			name = "test"
+		};
+		await _container.CreateItemAsync(document, new PartitionKey("pk-1"));
 
-        // WHERE c.linkedId != null should NOT match when property is missing (treated as null)
-        var patchOperations = new[] { PatchOperation.Set("/name", "updated") };
-        var options = new PatchItemRequestOptions
-        {
-            FilterPredicate = "FROM c WHERE c.linkedId != null"
-        };
+		// WHERE c.linkedId != null should NOT match when property is missing (treated as null)
+		var patchOperations = new[] { PatchOperation.Set("/name", "updated") };
+		var options = new PatchItemRequestOptions
+		{
+			FilterPredicate = "FROM c WHERE c.linkedId != null"
+		};
 
-        var act = () => _container.PatchItemAsync<dynamic>(
-            document.id, new PartitionKey("pk-1"), patchOperations, options);
+		var act = () => _container.PatchItemAsync<dynamic>(
+			document.id, new PartitionKey("pk-1"), patchOperations, options);
 
-        var ex = await act.Should().ThrowAsync<CosmosException>();
-        ex.Which.StatusCode.Should().Be(HttpStatusCode.PreconditionFailed);
-    }
+		var ex = await act.Should().ThrowAsync<CosmosException>();
+		ex.Which.StatusCode.Should().Be(HttpStatusCode.PreconditionFailed);
+	}
 
-    [Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
-    [Fact]
-    public async Task PatchWithFilterPredicate_ExplicitNullPropertyEqualsNull_Succeeds()
-    {
-        // Use stream to explicitly write null (bypassing NullValueHandling.Ignore)
-        var id = Guid.NewGuid().ToString();
-        var json = $$"""{"id":"{{id}}","partitionKey":"pk-1","linkedId":null,"name":"test"}""";
-        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
-        await _container.CreateItemStreamAsync(stream, new PartitionKey("pk-1"));
+	[Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
+	[Fact]
+	public async Task PatchWithFilterPredicate_ExplicitNullPropertyEqualsNull_Succeeds()
+	{
+		// Use stream to explicitly write null (bypassing NullValueHandling.Ignore)
+		var id = Guid.NewGuid().ToString();
+		var json = $$"""{"id":"{{id}}","partitionKey":"pk-1","linkedId":null,"name":"test"}""";
+		using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+		await _container.CreateItemStreamAsync(stream, new PartitionKey("pk-1"));
 
-        var patchOperations = new[] { PatchOperation.Set("/linkedId", "new-value") };
-        var options = new PatchItemRequestOptions
-        {
-            FilterPredicate = "FROM c WHERE c.linkedId = null"
-        };
+		var patchOperations = new[] { PatchOperation.Set("/linkedId", "new-value") };
+		var options = new PatchItemRequestOptions
+		{
+			FilterPredicate = "FROM c WHERE c.linkedId = null"
+		};
 
-        var response = await _container.PatchItemAsync<dynamic>(
-            id, new PartitionKey("pk-1"), patchOperations, options);
+		var response = await _container.PatchItemAsync<dynamic>(
+			id, new PartitionKey("pk-1"), patchOperations, options);
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-    }
+		response.StatusCode.Should().Be(HttpStatusCode.OK);
+	}
 
-    [Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
-    [Fact]
-    public async Task PatchWithFilterPredicate_MissingPropertyEqualsValue_FailsPrecondition()
-    {
-        // linkedId is null → will NOT be serialized due to NullValueHandling.Ignore
-        var document = new
-        {
-            id = Guid.NewGuid().ToString(),
-            partitionKey = "pk-1",
-            linkedId = (string?)null,
-            name = "test"
-        };
-        await _container.CreateItemAsync(document, new PartitionKey("pk-1"));
+	[Trait(TestTraits.Target, TestTraits.InMemoryOnly)]
+	[Fact]
+	public async Task PatchWithFilterPredicate_MissingPropertyEqualsValue_FailsPrecondition()
+	{
+		// linkedId is null → will NOT be serialized due to NullValueHandling.Ignore
+		var document = new
+		{
+			id = Guid.NewGuid().ToString(),
+			partitionKey = "pk-1",
+			linkedId = (string?)null,
+			name = "test"
+		};
+		await _container.CreateItemAsync(document, new PartitionKey("pk-1"));
 
-        // WHERE c.linkedId = 'some-value' should NOT match — missing property treated as null ≠ 'some-value'
-        var patchOperations = new[] { PatchOperation.Set("/name", "updated") };
-        var options = new PatchItemRequestOptions
-        {
-            FilterPredicate = "FROM c WHERE c.linkedId = 'some-value'"
-        };
+		// WHERE c.linkedId = 'some-value' should NOT match — missing property treated as null ≠ 'some-value'
+		var patchOperations = new[] { PatchOperation.Set("/name", "updated") };
+		var options = new PatchItemRequestOptions
+		{
+			FilterPredicate = "FROM c WHERE c.linkedId = 'some-value'"
+		};
 
-        var act = () => _container.PatchItemAsync<dynamic>(
-            document.id, new PartitionKey("pk-1"), patchOperations, options);
+		var act = () => _container.PatchItemAsync<dynamic>(
+			document.id, new PartitionKey("pk-1"), patchOperations, options);
 
-        var ex = await act.Should().ThrowAsync<CosmosException>();
-        ex.Which.StatusCode.Should().Be(HttpStatusCode.PreconditionFailed);
-    }
+		var ex = await act.Should().ThrowAsync<CosmosException>();
+		ex.Which.StatusCode.Should().Be(HttpStatusCode.PreconditionFailed);
+	}
 }
 
 /// <summary>
@@ -160,30 +160,30 @@ public class Issue70FilterPredicateMissingPropertyTests : IAsyncLifetime
 /// </summary>
 internal sealed class CosmosJsonDotNetSerializer : CosmosSerializer
 {
-    private readonly JsonSerializer _serializer;
+	private readonly JsonSerializer _serializer;
 
-    public CosmosJsonDotNetSerializer(JsonSerializerSettings settings)
-    {
-        _serializer = JsonSerializer.Create(settings);
-    }
+	public CosmosJsonDotNetSerializer(JsonSerializerSettings settings)
+	{
+		_serializer = JsonSerializer.Create(settings);
+	}
 
-    public override T FromStream<T>(Stream stream)
-    {
-        using var sr = new StreamReader(stream);
-        using var jr = new JsonTextReader(sr);
-        return _serializer.Deserialize<T>(jr)!;
-    }
+	public override T FromStream<T>(Stream stream)
+	{
+		using var sr = new StreamReader(stream);
+		using var jr = new JsonTextReader(sr);
+		return _serializer.Deserialize<T>(jr)!;
+	}
 
-    public override Stream ToStream<T>(T input)
-    {
-        var ms = new MemoryStream();
-        using (var sw = new StreamWriter(ms, leaveOpen: true))
-        using (var jw = new JsonTextWriter(sw))
-        {
-            _serializer.Serialize(jw, input);
-            jw.Flush();
-        }
-        ms.Position = 0;
-        return ms;
-    }
+	public override Stream ToStream<T>(T input)
+	{
+		var ms = new MemoryStream();
+		using (var sw = new StreamWriter(ms, leaveOpen: true))
+		using (var jw = new JsonTextWriter(sw))
+		{
+			_serializer.Serialize(jw, input);
+			jw.Flush();
+		}
+		ms.Position = 0;
+		return ms;
+	}
 }

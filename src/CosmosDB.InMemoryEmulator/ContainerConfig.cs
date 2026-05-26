@@ -6,7 +6,7 @@ namespace CosmosDB.InMemoryEmulator;
 /// Configuration for a single in-memory Cosmos container.
 /// </summary>
 public record ContainerConfig(
-    string ContainerName,
-    string PartitionKeyPath = "/id",
-    string? DatabaseName = null,
-    ContainerProperties? ContainerProperties = null);
+	string ContainerName,
+	string PartitionKeyPath = "/id",
+	string? DatabaseName = null,
+	ContainerProperties? ContainerProperties = null);

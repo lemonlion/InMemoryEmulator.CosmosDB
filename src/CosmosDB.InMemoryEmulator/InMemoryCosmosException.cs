@@ -22,15 +22,15 @@ namespace CosmosDB.InMemoryEmulator;
 /// </summary>
 public static class InMemoryCosmosException
 {
-    /// <summary>
-    /// Creates a new <see cref="CosmosException"/>.
-    /// <para>
-    /// <see cref="CosmosException.Diagnostics"/> will be <c>null</c> because the SDK
-    /// does not provide a public constructor or setter that accepts diagnostics.
-    /// </para>
-    /// </summary>
-    public static CosmosException Create(string message, HttpStatusCode statusCode, int subStatusCode, string activityId, double requestCharge)
-    {
-        return new CosmosException(message, statusCode, subStatusCode, activityId, requestCharge);
-    }
+	/// <summary>
+	/// Creates a new <see cref="CosmosException"/>.
+	/// <para>
+	/// <see cref="CosmosException.Diagnostics"/> will be <c>null</c> because the SDK
+	/// does not provide a public constructor or setter that accepts diagnostics.
+	/// </para>
+	/// </summary>
+	public static CosmosException Create(string message, HttpStatusCode statusCode, int subStatusCode, string activityId, double requestCharge)
+	{
+		return new CosmosException(message, statusCode, subStatusCode, activityId, requestCharge);
+	}
 }

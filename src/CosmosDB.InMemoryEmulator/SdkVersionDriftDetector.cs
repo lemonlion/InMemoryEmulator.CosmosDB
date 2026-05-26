@@ -10,55 +10,55 @@ namespace CosmosDB.InMemoryEmulator;
 /// </summary>
 public static class SdkVersionDriftDetector
 {
-    public static async Task<DriftReport> RunAsync()
-    {
-        var sdkVersion = typeof(CosmosClient).Assembly.GetName().Version?.ToString() ?? "unknown";
-        var report = new DriftReport
-        {
-            SdkVersion = sdkVersion,
-            TestSuiteVersion = typeof(FakeCosmosHandler).Assembly.GetName().Version?.ToString() ?? "unknown",
-            MinTestedVersion = FakeCosmosHandler.MinTestedSdkVersion.ToString(),
-            MaxTestedVersion = FakeCosmosHandler.MaxTestedSdkVersion.ToString(),
-            IsWithinTestedRange = IsWithinRange(sdkVersion),
-        };
+	public static async Task<DriftReport> RunAsync()
+	{
+		var sdkVersion = typeof(CosmosClient).Assembly.GetName().Version?.ToString() ?? "unknown";
+		var report = new DriftReport
+		{
+			SdkVersion = sdkVersion,
+			TestSuiteVersion = typeof(FakeCosmosHandler).Assembly.GetName().Version?.ToString() ?? "unknown",
+			MinTestedVersion = FakeCosmosHandler.MinTestedSdkVersion.ToString(),
+			MaxTestedVersion = FakeCosmosHandler.MaxTestedSdkVersion.ToString(),
+			IsWithinTestedRange = IsWithinRange(sdkVersion),
+		};
 
-        try
-        {
-            await FakeCosmosHandler.VerifySdkCompatibilityAsync();
-            report.CompatibilityPassed = true;
-        }
-        catch (Exception ex)
-        {
-            report.CompatibilityPassed = false;
-            report.CompatibilityError = ex.Message;
-        }
+		try
+		{
+			await FakeCosmosHandler.VerifySdkCompatibilityAsync();
+			report.CompatibilityPassed = true;
+		}
+		catch (Exception ex)
+		{
+			report.CompatibilityPassed = false;
+			report.CompatibilityError = ex.Message;
+		}
 
-        // Run a handler to collect unrecognised headers across multiple code paths
-        var container = new InMemoryContainer("drift-check", "/pk");
-        await container.CreateItemAsync(new { id = "1", pk = "a" }, new PartitionKey("a"));
-        using var handler = new FakeCosmosHandler(container);
-        using var client = handler.CreateClient();
-        var cosmosContainer = client.GetContainer("db", "drift-check");
+		// Run a handler to collect unrecognised headers across multiple code paths
+		var container = new InMemoryContainer("drift-check", "/pk");
+		await container.CreateItemAsync(new { id = "1", pk = "a" }, new PartitionKey("a"));
+		using var handler = new FakeCosmosHandler(container);
+		using var client = handler.CreateClient();
+		var cosmosContainer = client.GetContainer("db", "drift-check");
 
-        // Exercise read path
-        await cosmosContainer.ReadItemAsync<dynamic>("1", new PartitionKey("a"));
+		// Exercise read path
+		await cosmosContainer.ReadItemAsync<dynamic>("1", new PartitionKey("a"));
 
-        // Exercise query path
-        var iterator = cosmosContainer.GetItemQueryIterator<dynamic>("SELECT * FROM c");
-        while (iterator.HasMoreResults) await iterator.ReadNextAsync();
+		// Exercise query path
+		var iterator = cosmosContainer.GetItemQueryIterator<dynamic>("SELECT * FROM c");
+		while (iterator.HasMoreResults) await iterator.ReadNextAsync();
 
-        report.UnrecognisedHeaders = handler.UnrecognisedHeaders.Distinct().ToList();
-        return report;
-    }
+		report.UnrecognisedHeaders = handler.UnrecognisedHeaders.Distinct().ToList();
+		return report;
+	}
 
-    private static bool IsWithinRange(string sdkVersionString)
-    {
-        if (!Version.TryParse(sdkVersionString, out var sdkVersion))
-            return false;
+	private static bool IsWithinRange(string sdkVersionString)
+	{
+		if (!Version.TryParse(sdkVersionString, out var sdkVersion))
+			return false;
 
-        return sdkVersion >= FakeCosmosHandler.MinTestedSdkVersion
-            && sdkVersion <= FakeCosmosHandler.MaxTestedSdkVersion;
-    }
+		return sdkVersion >= FakeCosmosHandler.MinTestedSdkVersion
+			&& sdkVersion <= FakeCosmosHandler.MaxTestedSdkVersion;
+	}
 }
 
 /// <summary>
@@ -67,27 +67,27 @@ public static class SdkVersionDriftDetector
 /// </summary>
 public sealed class DriftReport
 {
-    [JsonPropertyName("sdkVersion")]
-    public string SdkVersion { get; set; } = "";
+	[JsonPropertyName("sdkVersion")]
+	public string SdkVersion { get; set; } = "";
 
-    [JsonPropertyName("testSuiteVersion")]
-    public string TestSuiteVersion { get; set; } = "";
+	[JsonPropertyName("testSuiteVersion")]
+	public string TestSuiteVersion { get; set; } = "";
 
-    [JsonPropertyName("minTestedVersion")]
-    public string MinTestedVersion { get; set; } = "";
+	[JsonPropertyName("minTestedVersion")]
+	public string MinTestedVersion { get; set; } = "";
 
-    [JsonPropertyName("maxTestedVersion")]
-    public string MaxTestedVersion { get; set; } = "";
+	[JsonPropertyName("maxTestedVersion")]
+	public string MaxTestedVersion { get; set; } = "";
 
-    [JsonPropertyName("isWithinTestedRange")]
-    public bool IsWithinTestedRange { get; set; }
+	[JsonPropertyName("isWithinTestedRange")]
+	public bool IsWithinTestedRange { get; set; }
 
-    [JsonPropertyName("compatibilityPassed")]
-    public bool CompatibilityPassed { get; set; }
+	[JsonPropertyName("compatibilityPassed")]
+	public bool CompatibilityPassed { get; set; }
 
-    [JsonPropertyName("compatibilityError")]
-    public string? CompatibilityError { get; set; }
+	[JsonPropertyName("compatibilityError")]
+	public string? CompatibilityError { get; set; }
 
-    [JsonPropertyName("unrecognisedHeaders")]
-    public List<string> UnrecognisedHeaders { get; set; } = [];
+	[JsonPropertyName("unrecognisedHeaders")]
+	public List<string> UnrecognisedHeaders { get; set; } = [];
 }

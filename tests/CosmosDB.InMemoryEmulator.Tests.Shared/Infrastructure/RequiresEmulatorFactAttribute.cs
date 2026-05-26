@@ -9,12 +9,12 @@ namespace CosmosDB.InMemoryEmulator.Tests.Infrastructure;
 /// </summary>
 public sealed class RequiresEmulatorFactAttribute : FactAttribute
 {
-    public RequiresEmulatorFactAttribute(
-        [CallerFilePath] string? sourceFilePath = null,
-        [CallerLineNumber] int sourceLineNumber = -1)
-        : base(sourceFilePath, sourceLineNumber)
-    {
-        if (!EmulatorDetector.IsAvailable)
-            Skip = "Cosmos DB emulator not available at localhost:8081";
-    }
+	public RequiresEmulatorFactAttribute(
+		[CallerFilePath] string? sourceFilePath = null,
+		[CallerLineNumber] int sourceLineNumber = -1)
+		: base(sourceFilePath, sourceLineNumber)
+	{
+		if (!EmulatorDetector.IsAvailable)
+			Skip = "Cosmos DB emulator not available at localhost:8081";
+	}
 }

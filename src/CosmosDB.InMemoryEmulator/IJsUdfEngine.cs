@@ -6,5 +6,5 @@ namespace CosmosDB.InMemoryEmulator;
 /// </summary>
 public interface IJsUdfEngine
 {
-    object? ExecuteUdf(string jsBody, object[] args);
+	object? ExecuteUdf(string jsBody, object[] args);
 }

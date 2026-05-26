@@ -1,8 +1,8 @@
+using AwesomeAssertions;
 using CosmosDB.InMemoryEmulator;
 using Microsoft.Azure.Cosmos;
 using Newtonsoft.Json.Linq;
 using Xunit;
-using AwesomeAssertions;
 
 namespace CosmosDB.InMemoryEmulator.Tests;
 
@@ -13,77 +13,77 @@ namespace CosmosDB.InMemoryEmulator.Tests;
 /// </summary>
 public class Issue59_CountBracketNotationTests
 {
-    [Fact]
-    public async Task Sum_WithBracketNotation_OnReservedWordField_Works()
-    {
-        using var cosmos = InMemoryCosmos.Builder()
-            .AddContainer("transactions", "/id")
-            .Build();
+	[Fact]
+	public async Task Sum_WithBracketNotation_OnReservedWordField_Works()
+	{
+		using var cosmos = InMemoryCosmos.Builder()
+			.AddContainer("transactions", "/id")
+			.Build();
 
-        var container = cosmos.Containers["transactions"];
-        await SeedTransactions(container);
+		var container = cosmos.Containers["transactions"];
+		await SeedTransactions(container);
 
-        var iterator = container.GetItemQueryIterator<decimal>(
-            "SELECT VALUE SUM(c.grossSettlementValue[\"value\"]) FROM c");
-        var page = await iterator.ReadNextAsync();
-        page.First().Should().Be(100m);
-    }
+		var iterator = container.GetItemQueryIterator<decimal>(
+			"SELECT VALUE SUM(c.grossSettlementValue[\"value\"]) FROM c");
+		var page = await iterator.ReadNextAsync();
+		page.First().Should().Be(100m);
+	}
 
-    [Fact]
-    public async Task Count_WithBracketNotationAndTernary_OnReservedWordField_DoesNotThrow()
-    {
-        using var cosmos = InMemoryCosmos.Builder()
-            .AddContainer("transactions", "/id")
-            .Build();
+	[Fact]
+	public async Task Count_WithBracketNotationAndTernary_OnReservedWordField_DoesNotThrow()
+	{
+		using var cosmos = InMemoryCosmos.Builder()
+			.AddContainer("transactions", "/id")
+			.Build();
 
-        var container = cosmos.Containers["transactions"];
-        await SeedTransactions(container);
+		var container = cosmos.Containers["transactions"];
+		await SeedTransactions(container);
 
-        var iterator = container.GetItemQueryIterator<int>(
-            "SELECT VALUE COUNT(c.grossSettlementValue[\"value\"] > 0 ? 1 : undefined) FROM c");
+		var iterator = container.GetItemQueryIterator<int>(
+			"SELECT VALUE COUNT(c.grossSettlementValue[\"value\"] > 0 ? 1 : undefined) FROM c");
 
-        var page = await iterator.ReadNextAsync();
-        page.First().Should().Be(1);
-    }
+		var page = await iterator.ReadNextAsync();
+		page.First().Should().Be(1);
+	}
 
-    [Fact]
-    public async Task Combined_CountAndSum_WithBracketNotation_OnReservedWordField_Works()
-    {
-        using var cosmos = InMemoryCosmos.Builder()
-            .AddContainer("transactions", "/id")
-            .Build();
+	[Fact]
+	public async Task Combined_CountAndSum_WithBracketNotation_OnReservedWordField_Works()
+	{
+		using var cosmos = InMemoryCosmos.Builder()
+			.AddContainer("transactions", "/id")
+			.Build();
 
-        var container = cosmos.Containers["transactions"];
-        await SeedTransactions(container);
-        await container.CreateItemAsync(
-            new
-            {
-                id = "2",
-                grossSettlementValue = new { value = -50m, currencyCode = "GBP" },
-                transactionType = "Settlement"
-            },
-            new PartitionKey("2"));
+		var container = cosmos.Containers["transactions"];
+		await SeedTransactions(container);
+		await container.CreateItemAsync(
+			new
+			{
+				id = "2",
+				grossSettlementValue = new { value = -50m, currencyCode = "GBP" },
+				transactionType = "Settlement"
+			},
+			new PartitionKey("2"));
 
-        var iterator = container.GetItemQueryIterator<JObject>(
-            "SELECT COUNT(c.grossSettlementValue[\"value\"] > 0 ? 1 : undefined) AS NumberTransactions, " +
-            "SUM(c.grossSettlementValue[\"value\"]) AS CreditTotal " +
-            "FROM c WHERE c.transactionType = 'Settlement'");
+		var iterator = container.GetItemQueryIterator<JObject>(
+			"SELECT COUNT(c.grossSettlementValue[\"value\"] > 0 ? 1 : undefined) AS NumberTransactions, " +
+			"SUM(c.grossSettlementValue[\"value\"]) AS CreditTotal " +
+			"FROM c WHERE c.transactionType = 'Settlement'");
 
-        var page = await iterator.ReadNextAsync();
-        var row = page.First();
-        row["NumberTransactions"]!.Value<int>().Should().Be(1);
-        row["CreditTotal"]!.Value<decimal>().Should().Be(50m);
-    }
+		var page = await iterator.ReadNextAsync();
+		var row = page.First();
+		row["NumberTransactions"]!.Value<int>().Should().Be(1);
+		row["CreditTotal"]!.Value<decimal>().Should().Be(50m);
+	}
 
-    private static async Task SeedTransactions(Container container)
-    {
-        await container.CreateItemAsync(
-            new
-            {
-                id = "1",
-                grossSettlementValue = new { value = 100m, currencyCode = "GBP" },
-                transactionType = "Settlement"
-            },
-            new PartitionKey("1"));
-    }
+	private static async Task SeedTransactions(Container container)
+	{
+		await container.CreateItemAsync(
+			new
+			{
+				id = "1",
+				grossSettlementValue = new { value = 100m, currencyCode = "GBP" },
+				transactionType = "Settlement"
+			},
+			new PartitionKey("1"));
+	}
 }
