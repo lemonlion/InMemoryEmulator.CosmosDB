@@ -5,21 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.21] - 2026-05-27
-
-### Fixed
-- Decimal scale not preserved on round-trip (Issue #75). Whole numbers stored as decimals (e.g. `1500m`) gained a trailing `.0` after retrieval. A custom `CosmosJsonWriter` now normalizes JSON numeric representations during `ParseJson` to match real Cosmos DB behavior: whole numbers serialize as integers, fractional values use minimal representation (trailing zeros stripped).
-- SUM aggregate returns inconsistent results across platforms (Issue #75). On Linux, `SUM` of whole numbers returned `750.0` instead of `750` because `List<double>.Sum()` always returns `double`. Aggregate assignment points now normalize whole-number doubles to longs before serialization.
-- Aggregate queries fail on Linux with "Underlying object does not have an 'payload' field" error. On non-Windows platforms the Cosmos SDK's native `ServiceInterop` DLL is unavailable, causing the SDK to request a query plan and activate its `AggregateQueryPipelineStage`. The query plan strategy now suppresses all aggregate info so the SDK never enters this pipeline — our handler already computes aggregates directly.
-- Double-to-long overflow when normalizing values at the `long.MaxValue` boundary. `(double)long.MaxValue` rounds up to 2^63 which overflows on cast; comparison changed from `<=` to strict `<`.
-
-## [4.0.20] - 2026-05-20
+## [4.0.20] - 2026-05-27
 
 ### Fixed
 - `COUNT(expr)` with nested ternary expressions no longer miscounts documents (Issue #64). `ExprToString` in `CosmosSqlParser` did not parenthesise ternary/coalesce sub-expressions when they appeared as operands of higher-precedence binary operators. When the SDK's transformed query was round-tripped through `SimplifySdkQuery`, the missing parentheses caused re-parsing to produce a different AST — e.g. `(innerTernary > 0) ? 1 : undefined` became `innerTernary ? val : (otherVal > 0 ? 1 : undefined)` — making `COUNT` evaluate the wrong condition. The fix wraps ternary and coalesce expressions in parentheses whenever they appear inside binary, unary, BETWEEN, IN, or LIKE operators.
 - String literal aliases in aggregate queries (e.g. `SELECT 'Settlement' AS Label, COUNT(1) AS ItemCount FROM c`) no longer return `null` on Linux (Issue #67). `ProjectAggregateFields` now evaluates literal/expression fields via `EvaluateSqlExpression` instead of treating them as property paths. `DefaultQueryPlanStrategy` also bypasses the SDK aggregate pipeline when literals appear alongside aggregates.
 - Patch operations with filter predicates referencing non-existent properties no longer throw (Issue #70). Missing properties are now treated as `null` in `FilterPredicate` evaluation, matching real Cosmos DB behavior.
 - Queries without `ORDER BY` now return documents in insertion order, matching real Cosmos DB behavior (Issue #72). Previously documents were returned in hash-map order due to `ConcurrentDictionary` enumeration. Added insertion-order tracking to `InMemoryContainer` that maintains document position across create, replace, upsert, and delete operations.
+- Decimal scale not preserved on round-trip (Issue #75). Whole numbers stored as decimals (e.g. `1500m`) gained a trailing `.0` after retrieval. A custom `CosmosJsonWriter` now normalizes JSON numeric representations during `ParseJson` to match real Cosmos DB behavior: whole numbers serialize as integers, fractional values use minimal representation (trailing zeros stripped).
+- SUM aggregate returns inconsistent results across platforms (Issue #75). On Linux, `SUM` of whole numbers returned `750.0` instead of `750` because `List<double>.Sum()` always returns `double`. Aggregate assignment points now normalize whole-number doubles to longs before serialization.
+- Aggregate queries fail on Linux with "Underlying object does not have an 'payload' field" error. On non-Windows platforms the Cosmos SDK's native `ServiceInterop` DLL is unavailable, causing the SDK to request a query plan and activate its `AggregateQueryPipelineStage`. The query plan strategy now suppresses all aggregate info so the SDK never enters this pipeline — our handler already computes aggregates directly.
+- Double-to-long overflow when normalizing values at the `long.MaxValue` boundary. `(double)long.MaxValue` rounds up to 2^63 which overflows on cast; comparison changed from `<=` to strict `<`.
 
 ### Changed
 - Removed `EmulatorFlaky` trait. The single flaky test (`ConcurrentReadsOfNonExistent`) now uses adaptive concurrency — 50 parallel reads for in-memory, 10 for emulator targets — eliminating the need for blanket test exclusions.
