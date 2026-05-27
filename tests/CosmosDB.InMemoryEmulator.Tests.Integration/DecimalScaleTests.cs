@@ -60,13 +60,17 @@ public class DecimalScaleTests(EmulatorSession session, ITestOutputHelper output
             $"whole number {inputValue}m should not gain trailing decimal places after round-trip");
     }
 
+    // Ref: Observed behavior on both Windows and Linux Cosmos DB emulators.
+    //   Cosmos DB stores numbers in JSON as raw numeric literals. Trailing zeros
+    //   (which are JSON-insignificant) are stripped on round-trip: 100.50 → 100.5,
+    //   25.00 → 25, etc. This is correct Cosmos behavior, not a bug.
     [Theory]
-    [InlineData("100.50", "100.50")]
-    [InlineData("25.00", "25.00")]
-    [InlineData("0.10", "0.10")]
-    [InlineData("1.00", "1.00")]
-    [InlineData("999.990", "999.990")]
-    public async Task RoundTrip_TrailingZeros_ShouldBePreserved(string inputValue, string expectedToString)
+    [InlineData("100.50", "100.5")]
+    [InlineData("25.00", "25")]
+    [InlineData("0.10", "0.1")]
+    [InlineData("1.00", "1")]
+    [InlineData("999.990", "999.99")]
+    public async Task RoundTrip_TrailingZeros_ShouldBeStripped(string inputValue, string expectedToString)
     {
         var id = Guid.NewGuid().ToString();
         var amount = decimal.Parse(inputValue);
@@ -79,7 +83,7 @@ public class DecimalScaleTests(EmulatorSession session, ITestOutputHelper output
 
         response.Resource.Amount.Should().Be(amount, "the arithmetic value must be preserved");
         response.Resource.Amount.ToString().Should().Be(expectedToString,
-            $"decimal {inputValue} should preserve trailing zeros after round-trip (scale must be maintained)");
+            $"decimal {inputValue} should have trailing zeros stripped after round-trip (Cosmos stores minimal JSON representation)");
     }
 
     [Theory]
@@ -126,7 +130,7 @@ public class DecimalScaleTests(EmulatorSession session, ITestOutputHelper output
         output.WriteLine($"SmallFraction: {document.SmallFraction} -> {response.Resource.SmallFraction}");
 
         response.Resource.WholeNumber.ToString().Should().Be("1500", "whole number should not gain .0");
-        response.Resource.WithTrailingZero.ToString().Should().Be("100.50", "trailing zero should be preserved");
+        response.Resource.WithTrailingZero.ToString().Should().Be("100.5", "trailing zero should be stripped (Cosmos stores minimal JSON)");
         response.Resource.PureZero.ToString().Should().Be("0", "zero should remain 0 without .0");
         response.Resource.SmallFraction.ToString().Should().Be("0.01", "significant fractional digits should be preserved");
     }
@@ -187,8 +191,8 @@ public class DecimalScaleTests(EmulatorSession session, ITestOutputHelper output
         output.WriteLine($"SUM(25.50 + 25.00) = {result}, ToString: \"{result}\"");
 
         result.Should().Be(50.5m, "arithmetic must be correct");
-        result.ToString().Should().BeOneOf("50.5", "50.50",
-            "SUM of fractional numbers should not add unexpected trailing zeros");
+        result.ToString().Should().Be("50.5",
+            "SUM of fractional numbers should return the minimal representation");
     }
 
     [Fact]
