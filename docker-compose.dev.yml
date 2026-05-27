@@ -8,17 +8,28 @@
 #   docker compose -f docker-compose.dev.yml up -d dev
 #   docker compose -f docker-compose.dev.yml up -d emulator
 #   docker compose -f docker-compose.dev.yml up -d  # both
+#
+# Networking: The dev container shares the emulator's network namespace
+# (network_mode: "service:emulator") so the tests can reach the emulator
+# at localhost:8081 — exactly like CI. When only the dev container is running
+# (no emulator), it uses bridge networking by default via the dev-standalone profile.
 
 services:
   dev:
     image: mcr.microsoft.com/dotnet/sdk:8.0
     container_name: cosmosdb-dev-linux
+    profiles: ["with-emulator"]
+    # Share the emulator's network namespace — tests see emulator at localhost:8081
+    # just like in CI (GitHub Actions service containers share localhost).
+    network_mode: "service:emulator"
+    depends_on:
+      emulator:
+        condition: service_healthy
     volumes:
       - .:/src
+      - ${NUGET_PACKAGES:-${USERPROFILE:-.}/.nuget/packages}:/root/.nuget/fallback-packages:ro
       - nuget-cache:/root/.nuget/packages
     working_dir: /src
-    # Install PowerShell on first start — run-tests.ps1 requires it.
-    # The install is cached in the container's writable layer as long as it stays running.
     command: >
       bash -c "
         if ! command -v pwsh &>/dev/null; then
@@ -29,21 +40,34 @@ services:
     environment:
       - DOTNET_CLI_TELEMETRY_OPTOUT=1
       - DOTNET_NOLOGO=1
-    networks:
-      - dev-net
+
+  # Standalone dev container (no emulator dependency) — for inmemory-only Linux testing
+  dev-standalone:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    container_name: cosmosdb-dev-linux
+    profiles: ["standalone"]
+    volumes:
+      - .:/src
+      - ${NUGET_PACKAGES:-${USERPROFILE:-.}/.nuget/packages}:/root/.nuget/fallback-packages:ro
+      - nuget-cache:/root/.nuget/packages
+    working_dir: /src
+    command: >
+      bash -c "
+        if ! command -v pwsh &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq powershell >/dev/null 2>&1;
+        fi;
+        sleep infinity
+      "
+    environment:
+      - DOTNET_CLI_TELEMETRY_OPTOUT=1
+      - DOTNET_NOLOGO=1
 
   emulator:
     image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator
     container_name: cosmosdb-emulator-linux
+    profiles: ["with-emulator", "emulator-only"]
     ports:
       - "8081:8081"
-      - "10250:10250"
-      - "10251:10251"
-      - "10252:10252"
-      - "10253:10253"
-      - "10254:10254"
-      - "10255:10255"
-      - "10256:10256"
     environment:
       AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 30
       AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "false"
@@ -54,12 +78,6 @@ services:
       timeout: 5s
       retries: 60
       start_period: 30s
-    networks:
-      - dev-net
 
 volumes:
   nuget-cache:
-
-networks:
-  dev-net:
-    driver: bridge

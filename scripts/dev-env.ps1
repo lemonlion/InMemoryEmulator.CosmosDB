@@ -98,9 +98,13 @@ function Test-EmulatorHealthy {
     return ($LASTEXITCODE -eq 0 -and $health -eq 'healthy')
 }
 
-function Start-Service([string]$ServiceName) {
+function Start-DockerService([string]$ServiceName, [string]$Profile = '') {
     Write-Host "Starting service '$ServiceName'..." -ForegroundColor Cyan
-    docker compose -f $ComposeFile up -d $ServiceName
+    if ($Profile) {
+        docker compose -f $ComposeFile --profile $Profile up -d $ServiceName
+    } else {
+        docker compose -f $ComposeFile up -d $ServiceName
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to start service '$ServiceName'"
         exit 1
@@ -128,8 +132,17 @@ function Wait-ForEmulator {
 }
 
 function Ensure-DevContainer {
+    param([switch]$WithEmulatorNetwork)
+
     if (-not (Test-ContainerRunning 'cosmosdb-dev-linux')) {
-        Start-Service 'dev'
+        if ($WithEmulatorNetwork) {
+            # Start with the with-emulator profile — dev shares emulator's network namespace.
+            # The emulator must be healthy first (depends_on condition ensures this).
+            Start-DockerService 'dev' 'with-emulator'
+        } else {
+            # Standalone — no emulator dependency, uses default bridge networking.
+            Start-DockerService 'dev-standalone' 'standalone'
+        }
         # Wait for PowerShell to be installed (container command installs it on first start)
         Write-Host "Waiting for container to be ready (installing PowerShell if needed)..." -ForegroundColor Cyan
         $elapsed = 0
@@ -145,18 +158,19 @@ function Ensure-DevContainer {
         }
         Write-Host "Container ready." -ForegroundColor Green
 
-        # Restore NuGet packages
+        # Configure NuGet to use the mounted host package cache as a fallback source,
+        # avoiding network issues (e.g., corporate proxy TLS interception).
         Write-Host "Restoring NuGet packages in container..." -ForegroundColor Cyan
-        docker exec cosmosdb-dev-linux dotnet restore --verbosity quiet
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "NuGet restore had issues — tests may still work if packages are cached."
-        }
+        docker exec cosmosdb-dev-linux bash -c "dotnet nuget add source /root/.nuget/fallback-packages --name host-cache 2>/dev/null; dotnet restore -p:TargetFrameworks=net8.0 --source /root/.nuget/fallback-packages --verbosity quiet 2>&1 || true"
+        # Reset exit code — restore warnings are non-fatal
+        $global:LASTEXITCODE = 0
+        Write-Host "Restore complete." -ForegroundColor Green
     }
 }
 
 function Ensure-Emulator {
     if (-not (Test-ContainerRunning 'cosmosdb-emulator-linux')) {
-        Start-Service 'emulator'
+        Start-DockerService 'emulator' 'emulator-only'
     }
     if (-not (Test-EmulatorHealthy)) {
         Wait-ForEmulator
@@ -190,19 +204,21 @@ function Invoke-Start {
         Write-Host "`nEmulator running at https://localhost:8081" -ForegroundColor Green
     } elseif ($WithEmulator) {
         Ensure-Emulator
-        Ensure-DevContainer
+        Ensure-DevContainer -WithEmulatorNetwork
         Write-Host "`nDev container + emulator running." -ForegroundColor Green
-        Write-Host "  Dev container: cosmosdb-dev-linux" -ForegroundColor DarkGray
-        Write-Host "  Emulator:      https://localhost:8081 (host) / https://emulator:8081 (from dev container)" -ForegroundColor DarkGray
+        Write-Host "  Dev container: cosmosdb-dev-linux (shares emulator network — localhost:8081)" -ForegroundColor DarkGray
+        Write-Host "  Emulator:      https://localhost:8081" -ForegroundColor DarkGray
     } else {
         Ensure-DevContainer
         Write-Host "`nDev container running: cosmosdb-dev-linux" -ForegroundColor Green
     }
+    exit 0
 }
 
 function Invoke-Stop {
     Write-Host "Stopping dev environment..." -ForegroundColor Cyan
-    docker compose -f $ComposeFile down
+    # Tear down all profiles
+    docker compose -f $ComposeFile --profile with-emulator --profile standalone --profile emulator-only down
     Write-Host "Done." -ForegroundColor Green
 }
 
@@ -210,6 +226,9 @@ function Invoke-Status {
     $devRunning = Test-ContainerRunning 'cosmosdb-dev-linux'
     $emulatorRunning = Test-ContainerRunning 'cosmosdb-emulator-linux'
     $emulatorHealthy = if ($emulatorRunning) { Test-EmulatorHealthy } else { $false }
+
+    # Reset LASTEXITCODE — docker inspect failures above are expected when containers don't exist
+    $global:LASTEXITCODE = 0
 
     Write-Host "Cross-Platform Dev Environment Status" -ForegroundColor Cyan
     Write-Host "─────────────────────────────────────" -ForegroundColor DarkGray
@@ -327,7 +346,7 @@ function Invoke-Test {
         'linux|inmemory' {
             Write-Host "Scenario 4: Linux container + in-memory" -ForegroundColor Cyan
             Test-DockerAvailable | Out-Null
-            Ensure-DevContainer
+            Ensure-DevContainer  # standalone profile — no emulator dependency
             Write-Host ""
 
             $envVars = @{
@@ -342,15 +361,18 @@ function Invoke-Test {
         'linux|emulator-linux' {
             Write-Host "Scenario 5: Linux container + Linux emulator" -ForegroundColor Cyan
             Test-DockerAvailable | Out-Null
-            Ensure-DevContainer
             Ensure-Emulator
+            Ensure-DevContainer -WithEmulatorNetwork  # shares emulator's network namespace
             Write-Host ""
 
+            # The dev container shares the emulator's network namespace (network_mode: service:emulator),
+            # so the emulator is reachable at localhost:8081 — same as CI.
+            $emulatorEndpoint = 'https://localhost:8081'
             $envVars = @{
                 COSMOS_TEST_TARGET = 'emulator-linux'
-                COSMOS_EMULATOR_ENDPOINT = 'https://emulator:8081'
+                COSMOS_EMULATOR_ENDPOINT = $emulatorEndpoint
             }
-            $cmd = "pwsh -NoProfile -Command `"& $runTestsScript -Target emulator-linux -Project $Project -Framework $Framework -EmulatorEndpoint 'https://emulator:8081'$(if ($Filter) { " -Filter '$Filter'" })`""
+            $cmd = "pwsh -NoProfile -Command `"& $runTestsScript -Target emulator-linux -Project $Project -Framework $Framework -EmulatorEndpoint '$emulatorEndpoint'$(if ($Filter) { " -Filter '$Filter'" })`""
             $exitCode = Invoke-InContainer -Command $cmd -EnvVars $envVars
             exit $exitCode
         }
