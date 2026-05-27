@@ -1,0 +1,65 @@
+# Cross-Platform Development Environment
+#
+# Defines services for local cross-platform testing:
+#   dev      — Linux .NET SDK container for running tests on Linux
+#   emulator — Linux Cosmos DB emulator for integration tests
+#
+# Usage: managed via scripts/dev-env.ps1 (preferred) or directly:
+#   docker compose -f docker-compose.dev.yml up -d dev
+#   docker compose -f docker-compose.dev.yml up -d emulator
+#   docker compose -f docker-compose.dev.yml up -d  # both
+
+services:
+  dev:
+    image: mcr.microsoft.com/dotnet/sdk:8.0
+    container_name: cosmosdb-dev-linux
+    volumes:
+      - .:/src
+      - nuget-cache:/root/.nuget/packages
+    working_dir: /src
+    # Install PowerShell on first start — run-tests.ps1 requires it.
+    # The install is cached in the container's writable layer as long as it stays running.
+    command: >
+      bash -c "
+        if ! command -v pwsh &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq powershell >/dev/null 2>&1;
+        fi;
+        sleep infinity
+      "
+    environment:
+      - DOTNET_CLI_TELEMETRY_OPTOUT=1
+      - DOTNET_NOLOGO=1
+    networks:
+      - dev-net
+
+  emulator:
+    image: mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator
+    container_name: cosmosdb-emulator-linux
+    ports:
+      - "8081:8081"
+      - "10250:10250"
+      - "10251:10251"
+      - "10252:10252"
+      - "10253:10253"
+      - "10254:10254"
+      - "10255:10255"
+      - "10256:10256"
+    environment:
+      AZURE_COSMOS_EMULATOR_PARTITION_COUNT: 30
+      AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE: "false"
+      AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE: "127.0.0.1"
+    healthcheck:
+      test: ["CMD", "curl", "-fks", "https://localhost:8081/_explorer/emulator.pem"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    networks:
+      - dev-net
+
+volumes:
+  nuget-cache:
+
+networks:
+  dev-net:
+    driver: bridge

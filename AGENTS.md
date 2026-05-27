@@ -79,6 +79,52 @@ Tests are split into two projects. When creating or moving tests, follow these r
 ### Key constraint
 The Integration project does **not** have `InternalsVisibleTo` access. If a test needs internal APIs, it belongs in Unit.
 
+## Cross-Platform Testing (Dev Environment)
+
+When investigating platform-specific test failures, use `scripts/dev-env.ps1` to reproduce issues locally on any platform + backend combination.
+
+### Quick Reference
+
+```powershell
+# Check current state
+./scripts/dev-env.ps1 status
+
+# Reproduce a Linux CI failure
+./scripts/dev-env.ps1 test -Platform linux -Target inmemory -Project integration -Filter "FullyQualifiedName~FailingTest"
+
+# Reproduce a Linux + emulator CI failure
+./scripts/dev-env.ps1 test -Platform linux -Target emulator-linux -Project integration -Filter "FullyQualifiedName~FailingTest"
+
+# Run against Linux emulator from Windows host (tests emulator behavioral differences)
+./scripts/dev-env.ps1 test -Platform windows -Target emulator-linux -Project integration
+
+# Run arbitrary commands in the Linux container
+./scripts/dev-env.ps1 exec -Cmd "dotnet build -c Release"
+
+# Tear down when done
+./scripts/dev-env.ps1 stop
+```
+
+### Investigation Workflow
+
+When a test fails in CI on Linux but passes locally on Windows:
+
+1. First try reproducing on Linux with in-memory: `./scripts/dev-env.ps1 test -Platform linux -Target inmemory -Filter "FullyQualifiedName~TestName"`
+2. If it fails → it's a Linux .NET runtime difference (gateway fallback, string handling, etc.)
+3. If it passes → try with the emulator: `./scripts/dev-env.ps1 test -Platform linux -Target emulator-linux -Filter "FullyQualifiedName~TestName"`
+4. If that fails → it's a Linux + emulator interaction issue
+5. Edit source files normally (they're mounted into the container), then re-run
+
+### Supported Scenarios
+
+| Platform | Target | Docker Required |
+|----------|--------|----------------|
+| windows | inmemory | No |
+| windows | emulator-windows | No (needs Windows emulator installed) |
+| windows | emulator-linux | Yes (emulator container) |
+| linux | inmemory | Yes (dev container) |
+| linux | emulator-linux | Yes (dev + emulator containers) |
+
 ## Documentation
 
 After any changes are made that might effect the public API or functionality, documentation must be updated to reflect those changes.  The documentation should be clear and comprehensive, covering all new features, changes to existing features, and any deprecations or removals.  This includes updating README file (if relevant), but mainly the wiki which can be found in a sister folder to the main repository - ../CosmosDB.InMemoryEmulator.wiki.
