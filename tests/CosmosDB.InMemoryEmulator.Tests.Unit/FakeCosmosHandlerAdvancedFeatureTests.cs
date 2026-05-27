@@ -75,7 +75,7 @@ public class FakeCosmosHandlerAdvancedFeatureTests : IDisposable
     [Fact]
     public async Task UDF_RegisteredOnBackingContainer_UsableInQueryThroughHandler()
     {
-        _inMemoryContainer.RegisterUdf("doubleIt", args => (double)args[0] * 2);
+        _inMemoryContainer.RegisterUdf("doubleIt", args => Convert.ToDouble(args[0]) * 2);
 
         await _container.CreateItemAsync(
             new TestDocument { Id = "1", PartitionKey = "pk1", Name = "Alice", Value = 5,

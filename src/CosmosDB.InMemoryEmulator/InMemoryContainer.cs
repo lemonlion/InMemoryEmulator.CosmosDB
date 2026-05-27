@@ -4695,13 +4695,13 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     if (funcName == "SUM")
                     {
                         if (values.Count > 0)
-                            resultObj[outputName] = values.Sum();
+                            resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Sum()));
                         // else: omit field entirely (undefined) — matches Cosmos DB
                     }
                     else // AVG
                     {
                         if (values.Count > 0)
-                            resultObj[outputName] = values.Average();
+                            resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Average()));
                     }
                 }
                 else if (funcName is "MIN" or "MAX" && innerArg != null)
@@ -5077,8 +5077,8 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     }
                     return func.FunctionName switch
                     {
-                        "SUM" => values.Count > 0 ? (object)values.Sum() : UndefinedValue.Instance,
-                        "AVG" => values.Count > 0 ? (object)values.Average() : UndefinedValue.Instance,
+                        "SUM" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Sum()) : UndefinedValue.Instance,
+                        "AVG" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Average()) : UndefinedValue.Instance,
                         _ => 0.0
                     };
                 }
@@ -5414,13 +5414,13 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 if (funcName == "SUM")
                 {
                     if (values.Count > 0)
-                        resultObj[outputName] = values.Sum();
+                        resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Sum()));
                     // else: omit field entirely (undefined) — matches Cosmos DB
                 }
                 else // AVG
                 {
                     if (values.Count > 0)
-                        resultObj[outputName] = values.Average();
+                        resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Average()));
                     // else: omit field entirely (undefined)
                 }
             }
@@ -8006,8 +8006,8 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         return name switch
         {
-            "SUM" => values.Count > 0 ? values.Sum(v => v.Value<double>()) : (object)UndefinedValue.Instance,
-            "AVG" => values.Count > 0 ? values.Average(v => v.Value<double>()) : (object)UndefinedValue.Instance,
+            "SUM" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Sum(v => v.Value<double>())) : (object)UndefinedValue.Instance,
+            "AVG" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Average(v => v.Value<double>())) : (object)UndefinedValue.Instance,
             "MIN" => AggregateMinMax(values, true),
             "MAX" => AggregateMinMax(values, false),
             _ => null

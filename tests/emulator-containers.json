@@ -7,6 +7,7 @@
     { "name": "pknone-test", "partitionKeyPath": "/partitionKey" },
     { "name": "num-pk-test", "partitionKeyPath": "/numericPk" },
     { "name": "bool-pk-test", "partitionKeyPath": "/boolPk" },
+    { "name": "test-decimal-scale", "partitionKeyPath": "/partitionKey" },
     { "name": "test-batch", "partitionKeyPath": "/partitionKey" },
     { "name": "test-bulk", "partitionKeyPath": "/partitionKey" },
     { "name": "test-pk", "partitionKeyPath": "/partitionKey" },

@@ -142,20 +142,18 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
             queryInfo["hasSelectValue"] = true;
         }
 
-        // Suppress SDK pipeline for GROUP BY, multi-aggregate, and VALUE aggregate
-        // queries. Also bypass any query referencing COUNTIF — the SDK pipeline
-        // doesn't recognize COUNTIF and tries to apply its built-in aggregate
-        // accumulator, which expects a {payload: {alias: {item: value}}} envelope
-        // the handler only produces for GROUP BY responses.
-        // Additionally bypass when literal expressions appear alongside aggregates
-        // (e.g. SELECT 42 AS X, COUNT(1) AS N) — the SDK's AggregateQueryPipelineStage
-        // doesn't handle non-aggregate expression fields and crashes with
+        // Suppress SDK pipeline for GROUP BY and any aggregate queries. The SDK's
+        // AggregateQueryPipelineStage expects a {payload: {alias: {item: value}}} envelope
+        // the handler only produces for GROUP BY responses. On non-Windows platforms
+        // (where ServiceInterop is unavailable), this plan drives the SDK pipeline —
+        // if we report aggregates, the SDK enters its aggregate accumulator which
+        // fails because our handler returns pre-computed results directly.
+        // Also bypass COUNTIF (not recognized by SDK pipeline) and literal+aggregate
+        // combinations (e.g. SELECT 42 AS X, COUNT(1) AS N) which crash with
         // "Underlying object does not have an 'payload' field".
         var isGroupByBypass = parsed.GroupByFields is { Length: > 0 };
         var aggregateFieldCount = parsed.SelectFields.Count(f => ContainsAggregate(f.SqlExpr));
-        var isMultiAggregateBypass = !isGroupByBypass && !parsed.IsValueSelect
-            && (aggregateFieldCount > 1 || aggregates.Count > 1);
-        var isValueAggregateBypass = !isGroupByBypass && parsed.IsValueSelect && aggregateFieldCount > 0;
+        var isAggregateBypass = !isGroupByBypass && aggregateFieldCount > 0;
         var isCountIfBypass = !isGroupByBypass
             && parsed.SelectFields.Any(f => ContainsCountIf(f.SqlExpr));
         // Bypass when there are non-aggregate expression fields (literals, function calls)
@@ -165,7 +163,7 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
             && parsed.SelectFields.Any(f => !ContainsAggregate(f.SqlExpr)
                 && f.SqlExpr is not null and not IdentifierExpression and not PropertyAccessExpression);
 
-        if (isGroupByBypass || isMultiAggregateBypass || isValueAggregateBypass || isCountIfBypass || isLiteralWithAggregateBypass)
+        if (isGroupByBypass || isAggregateBypass || isCountIfBypass || isLiteralWithAggregateBypass)
         {
             queryInfo["groupByExpressions"] = new JArray();
             queryInfo["groupByAliases"] = new JArray();

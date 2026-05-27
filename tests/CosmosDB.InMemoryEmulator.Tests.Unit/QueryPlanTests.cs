@@ -154,23 +154,27 @@ public class QueryPlanTests : IDisposable
     }
 
     [Fact]
-    public async Task QueryPlan_CountAggregate_DetectsCount()
+    public async Task QueryPlan_CountAggregate_SuppressedForLinuxCompatibility()
     {
+        // Single-aggregate bypass: aggregates are suppressed so the SDK
+        // doesn't activate AggregateQueryPipelineStage on non-Windows platforms.
         var plan = await GetQueryPlanAsync("SELECT COUNT(1) FROM c");
         var info = plan["queryInfo"]!;
 
         var aggregates = (JArray)info["aggregates"]!;
-        aggregates.Should().Contain(t => t.ToString() == "Count");
+        aggregates.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task QueryPlan_SumAggregate_DetectsSum()
+    public async Task QueryPlan_SumAggregate_SuppressedForLinuxCompatibility()
     {
+        // Single-aggregate bypass: aggregates are suppressed so the SDK
+        // doesn't activate AggregateQueryPipelineStage on non-Windows platforms.
         var plan = await GetQueryPlanAsync("SELECT SUM(c.value) FROM c");
         var info = plan["queryInfo"]!;
 
         var aggregates = (JArray)info["aggregates"]!;
-        aggregates.Should().Contain(t => t.ToString() == "Sum");
+        aggregates.Should().BeEmpty();
     }
 
     [Fact]
@@ -426,23 +430,27 @@ public class QueryPlanTests : IDisposable
     }
 
     [Fact]
-    public async Task QueryPlan_CountWithoutAlias_StillDetectsAggregate()
+    public async Task QueryPlan_CountWithoutAlias_SuppressedForLinuxCompatibility()
     {
+        // Single-aggregate bypass: aggregates are suppressed so the SDK
+        // doesn't activate AggregateQueryPipelineStage on non-Windows platforms.
         var plan = await GetQueryPlanAsync("SELECT COUNT(1) FROM c");
         var info = plan["queryInfo"]!;
 
         var aggregates = (JArray)info["aggregates"]!;
-        aggregates.Should().Contain(t => t.ToString() == "Count");
+        aggregates.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task QueryPlan_AggregateFunctionCaseInsensitive_Detected()
+    public async Task QueryPlan_AggregateFunctionCaseInsensitive_SuppressedForLinuxCompatibility()
     {
+        // Single-aggregate bypass: aggregates are suppressed so the SDK
+        // doesn't activate AggregateQueryPipelineStage on non-Windows platforms.
         var plan = await GetQueryPlanAsync("SELECT count(1) AS cnt FROM c");
         var info = plan["queryInfo"]!;
 
         var aggregates = (JArray)info["aggregates"]!;
-        aggregates.Should().Contain(t => t.ToString() == "Count");
+        aggregates.Should().BeEmpty();
     }
 
     [Fact]
