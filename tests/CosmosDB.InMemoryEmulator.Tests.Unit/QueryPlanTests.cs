@@ -156,21 +156,26 @@ public class QueryPlanTests : IDisposable
 	[Fact]
 	public async Task QueryPlan_CountAggregate_DetectsCount()
 	{
+		// Single-aggregate projection bypass: aggregates suppressed (Linux compatibility).
+		// SELECT COUNT(1) FROM c uses isSingleAggregateProjectionBypass so the SDK's
+		// AggregateQueryPipelineStage doesn't crash with a missing 'payload' field.
 		var plan = await GetQueryPlanAsync("SELECT COUNT(1) FROM c");
 		var info = plan["queryInfo"]!;
 
 		var aggregates = (JArray)info["aggregates"]!;
-		aggregates.Should().Contain(t => t.ToString() == "Count");
+		aggregates.Should().BeEmpty();
 	}
 
 	[Fact]
 	public async Task QueryPlan_SumAggregate_DetectsSum()
 	{
+		// Single-aggregate projection bypass: aggregates suppressed (Linux compatibility).
+		// SELECT SUM(c.value) FROM c uses isSingleAggregateProjectionBypass.
 		var plan = await GetQueryPlanAsync("SELECT SUM(c.value) FROM c");
 		var info = plan["queryInfo"]!;
 
 		var aggregates = (JArray)info["aggregates"]!;
-		aggregates.Should().Contain(t => t.ToString() == "Sum");
+		aggregates.Should().BeEmpty();
 	}
 
 	[Fact]
@@ -428,21 +433,25 @@ public class QueryPlanTests : IDisposable
 	[Fact]
 	public async Task QueryPlan_CountWithoutAlias_StillDetectsAggregate()
 	{
+		// Single-aggregate projection bypass: aggregates suppressed (Linux compatibility).
+		// SELECT COUNT(1) FROM c uses isSingleAggregateProjectionBypass.
 		var plan = await GetQueryPlanAsync("SELECT COUNT(1) FROM c");
 		var info = plan["queryInfo"]!;
 
 		var aggregates = (JArray)info["aggregates"]!;
-		aggregates.Should().Contain(t => t.ToString() == "Count");
+		aggregates.Should().BeEmpty();
 	}
 
 	[Fact]
 	public async Task QueryPlan_AggregateFunctionCaseInsensitive_Detected()
 	{
+		// Single-aggregate projection bypass: aggregates suppressed (Linux compatibility).
+		// SELECT count(1) AS cnt FROM c uses isSingleAggregateProjectionBypass.
 		var plan = await GetQueryPlanAsync("SELECT count(1) AS cnt FROM c");
 		var info = plan["queryInfo"]!;
 
 		var aggregates = (JArray)info["aggregates"]!;
-		aggregates.Should().Contain(t => t.ToString() == "Count");
+		aggregates.Should().BeEmpty();
 	}
 
 	[Fact]

@@ -209,24 +209,29 @@ public class QueryPlanDeepDiveTests : IDisposable
 	[Fact]
 	public async Task QueryPlan_SingleAggregateNoGroupByNoValue_PreservedInPlan()
 	{
+		// Single-aggregate projection bypass: aggregates suppressed (Linux compatibility).
+		// SELECT COUNT(1) FROM c uses isSingleAggregateProjectionBypass so the SDK's
+		// AggregateQueryPipelineStage doesn't crash with a missing 'payload' field.
 		var plan = await GetQueryPlanAsync("SELECT COUNT(1) FROM c");
 		var info = plan["queryInfo"]!;
 
 		var aggs = info["aggregates"]!.ToObject<string[]>()!;
-		aggs.Should().Contain("Count");
+		aggs.Should().BeEmpty();
 	}
 
 	[Fact]
 	public async Task QueryPlan_SingleAggregateWithAlias_MappedCorrectly()
 	{
+		// Single-aggregate projection bypass: aggregates and alias map suppressed (Linux compatibility).
+		// SELECT COUNT(1) AS cnt FROM c uses isSingleAggregateProjectionBypass.
 		var plan = await GetQueryPlanAsync("SELECT COUNT(1) AS cnt FROM c");
 		var info = plan["queryInfo"]!;
 
 		var aggs = info["aggregates"]!.ToObject<string[]>()!;
-		aggs.Should().Contain("Count");
+		aggs.Should().BeEmpty();
 
 		var aliasMap = info["groupByAliasToAggregateType"]!;
-		aliasMap["cnt"]!.ToString().Should().Be("Count");
+		aliasMap.Should().BeEmpty();
 	}
 
 	[Fact]

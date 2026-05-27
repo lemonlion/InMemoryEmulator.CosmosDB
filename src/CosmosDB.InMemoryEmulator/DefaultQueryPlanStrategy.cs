@@ -151,6 +151,9 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
 		// (e.g. SELECT 42 AS X, COUNT(1) AS N) — the SDK's AggregateQueryPipelineStage
 		// doesn't handle non-aggregate expression fields and crashes with
 		// "Underlying object does not have an 'payload' field".
+		// Also bypass single-aggregate projection queries (e.g. SELECT SUM(c.x) AS Total FROM c)
+		// for the same reason — the SDK's AggregateQueryPipelineStage expects a {payload: ...}
+		// envelope that the emulator doesn't produce for projection-style aggregate queries.
 		var isGroupByBypass = parsed.GroupByFields is { Length: > 0 };
 		var aggregateFieldCount = parsed.SelectFields.Count(f => ContainsAggregate(f.SqlExpr));
 		var isMultiAggregateBypass = !isGroupByBypass && !parsed.IsValueSelect
@@ -164,8 +167,12 @@ public sealed class DefaultQueryPlanStrategy : IQueryPlanStrategy
 			&& aggregateFieldCount > 0
 			&& parsed.SelectFields.Any(f => !ContainsAggregate(f.SqlExpr)
 				&& f.SqlExpr is not null and not IdentifierExpression and not PropertyAccessExpression);
+		// Bypass single-aggregate projection: SELECT SUM(c.x) AS Total FROM c
+		// The emulator returns results directly without the payload envelope the SDK expects.
+		var isSingleAggregateProjectionBypass = !isGroupByBypass && !parsed.IsValueSelect
+			&& aggregateFieldCount == 1 && aggregates.Count == 1;
 
-		if (isGroupByBypass || isMultiAggregateBypass || isValueAggregateBypass || isCountIfBypass || isLiteralWithAggregateBypass)
+		if (isGroupByBypass || isMultiAggregateBypass || isValueAggregateBypass || isCountIfBypass || isLiteralWithAggregateBypass || isSingleAggregateProjectionBypass)
 		{
 			queryInfo["groupByExpressions"] = new JArray();
 			queryInfo["groupByAliases"] = new JArray();

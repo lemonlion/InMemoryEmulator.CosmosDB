@@ -28476,16 +28476,17 @@ public class QueryDeepDiveV23_MathOpIntegerPreservationBugTests
 	}
 
 	[Fact]
-	public async Task Floor_DoubleInput_ReturnsFloat()
+	public async Task Floor_DoubleInput_ReturnsInteger()
 	{
 		await _container.CreateItemStreamAsync(
 			new MemoryStream(Encoding.UTF8.GetBytes("""{"id":"1","partitionKey":"pk1","dblVal":5.7}""")),
 			new PartitionKey("pk1"));
 		var results = await RunQuery("SELECT VALUE FLOOR(c.dblVal) FROM c");
 		results.Should().ContainSingle();
-		// FLOOR(5.7) = 5, but since input was double, result is double
-		results[0].Type.Should().Be(JTokenType.Float);
-		results[0].Value<double>().Should().Be(5.0);
+		// Ref: Real Cosmos DB (JavaScript engine): Math.floor(5.7) = 5, serialised as integer "5" in JSON.
+		// Whole-number results from math functions are integers, regardless of input type.
+		results[0].Type.Should().Be(JTokenType.Integer);
+		results[0].Value<long>().Should().Be(5L);
 	}
 
 	[Fact]
