@@ -14,6 +14,7 @@ Thank you for your interest in contributing!
 
 - .NET 8.0 SDK (or later)
 - PowerShell (for test scripts)
+- Docker (for cross-platform testing — Docker Desktop or Rancher Desktop)
 
 ## Building
 
@@ -24,15 +25,42 @@ dotnet build CosmosDB.InMemoryEmulator.sln
 ## Running Tests
 
 ```powershell
-# Unit tests only
+# Unit tests only (Windows, in-memory)
 dotnet test tests/CosmosDB.InMemoryEmulator.Tests.Unit
 
-# Integration tests (in-memory)
+# Integration tests (Windows, in-memory)
 dotnet test tests/CosmosDB.InMemoryEmulator.Tests.Integration
-
-# Full parity validation (requires Docker)
-./scripts/validate-parity.ps1
 ```
+
+## Cross-Platform Testing
+
+This project runs CI on both Windows and Linux. To reproduce platform-specific issues locally, use the dev environment script:
+
+```powershell
+# See what's running and available scenarios
+./scripts/dev-env.ps1 status
+
+# Run tests on Linux (catches gateway fallback / runtime differences)
+./scripts/dev-env.ps1 test -Platform linux -Target inmemory -Project integration
+
+# Run tests on Linux against the Linux Cosmos emulator
+./scripts/dev-env.ps1 test -Platform linux -Target emulator-linux -Project integration
+
+# Run tests on Windows against the Linux Cosmos emulator (emulator behavior differences)
+./scripts/dev-env.ps1 test -Platform windows -Target emulator-linux -Project integration
+
+# Run a specific failing test on Linux for investigation
+./scripts/dev-env.ps1 test -Platform linux -Target inmemory -Filter "FullyQualifiedName~MyFailingTest"
+
+# Start the Linux dev container for interactive exploration
+./scripts/dev-env.ps1 start
+./scripts/dev-env.ps1 exec -Cmd "dotnet build -c Release"
+
+# Tear down all containers
+./scripts/dev-env.ps1 stop
+```
+
+See [scripts/dev-env.ps1](scripts/dev-env.ps1) for full documentation of all commands and parameters.
 
 ## Guidelines
 
