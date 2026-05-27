@@ -125,7 +125,7 @@ public class InMemoryCosmosCreateWithOptionsTests
     }
 
     [Fact]
-    public async Task Create_WithConfigureContainer_ConfiguresContainer()
+    public void Create_WithConfigureContainer_ConfiguresContainer()
     {
         using var cosmos = InMemoryCosmos.Create("orders", "/partitionKey",
             configureContainer: c => c.DefaultTimeToLive = 3600);
@@ -250,7 +250,7 @@ public class InMemoryCosmosBuilderTests
     }
 
     [Fact]
-    public async Task Builder_WrapHandler_WrapsAllHandlers()
+    public void Builder_WrapHandler_WrapsAllHandlers()
     {
         var callCount = 0;
         using var cosmos = InMemoryCosmos.Builder()
@@ -278,7 +278,7 @@ public class InMemoryCosmosBuilderTests
     }
 
     [Fact]
-    public async Task Builder_AddContainerWithConfigure_ConfiguresContainer()
+    public void Builder_AddContainerWithConfigure_ConfiguresContainer()
     {
         using var cosmos = InMemoryCosmos.Builder()
             .AddContainer("orders", "/partitionKey", container =>

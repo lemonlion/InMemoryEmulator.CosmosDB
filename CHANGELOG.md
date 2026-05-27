@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.21] - 2026-05-27
+
+### Fixed
+- Decimal scale not preserved on round-trip (Issue #75). Whole numbers stored as decimals (e.g. `1500m`) gained a trailing `.0` after retrieval. A custom `CosmosJsonWriter` now normalizes JSON numeric representations during `ParseJson` to match real Cosmos DB behavior: whole numbers serialize as integers, fractional values use minimal representation (trailing zeros stripped).
+- SUM aggregate returns inconsistent results across platforms (Issue #75). On Linux, `SUM` of whole numbers returned `750.0` instead of `750` because `List<double>.Sum()` always returns `double`. Aggregate assignment points now normalize whole-number doubles to longs before serialization.
+- Aggregate queries fail on Linux with "Underlying object does not have an 'payload' field" error. On non-Windows platforms the Cosmos SDK's native `ServiceInterop` DLL is unavailable, causing the SDK to request a query plan and activate its `AggregateQueryPipelineStage`. The query plan strategy now suppresses all aggregate info so the SDK never enters this pipeline — our handler already computes aggregates directly.
+- Double-to-long overflow when normalizing values at the `long.MaxValue` boundary. `(double)long.MaxValue` rounds up to 2^63 which overflows on cast; comparison changed from `<=` to strict `<`.
+
 ## [4.0.20] - 2026-05-20
 
 ### Fixed

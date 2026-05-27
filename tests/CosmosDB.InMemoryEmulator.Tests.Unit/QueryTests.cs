@@ -28462,16 +28462,16 @@ public class QueryDeepDiveV23_MathOpIntegerPreservationBugTests
     }
 
     [Fact]
-    public async Task Floor_DoubleInput_ReturnsFloat()
+    public async Task Floor_DoubleInput_ReturnsInteger()
     {
         await _container.CreateItemStreamAsync(
             new MemoryStream(Encoding.UTF8.GetBytes("""{"id":"1","partitionKey":"pk1","dblVal":5.7}""")),
             new PartitionKey("pk1"));
         var results = await RunQuery("SELECT VALUE FLOOR(c.dblVal) FROM c");
         results.Should().ContainSingle();
-        // FLOOR(5.7) = 5, but since input was double, result is double
-        results[0].Type.Should().Be(JTokenType.Float);
-        results[0].Value<double>().Should().Be(5.0);
+        // Ref: Cosmos DB normalizes all JSON numbers — FLOOR(5.7) = 5 (integer in JSON)
+        results[0].Type.Should().Be(JTokenType.Integer);
+        results[0].Value<long>().Should().Be(5);
     }
 
     [Fact]

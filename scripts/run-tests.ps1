@@ -78,10 +78,7 @@ if ($needsIntegrationWarmup) {
     Write-Host "`nPre-creating emulator containers from manifest..." -ForegroundColor Cyan
     # `dotnet run` self-builds if needed — the warmup tool isn't in the solution,
     # so it's not covered by the workflow's solution-level build step.
-    # NuGetAudit is disabled because the dev container may not have internet access
-    # (e.g. linux+emulator-linux uses network_mode: service:emulator) and NU1900
-    # becomes a build error via TreatWarningsAsErrors.
-    & dotnet run --project $warmupProject --configuration Release -p:NuGetAudit=false -- $manifestPath
+    & dotnet run --project $warmupProject --configuration Release -- $manifestPath
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Emulator warmup failed with exit code $LASTEXITCODE" -ForegroundColor Red
         exit $LASTEXITCODE
