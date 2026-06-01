@@ -74,6 +74,11 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), string> _items = new();
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), string> _etags = new();
     private readonly ConcurrentDictionary<(string Id, string PartitionKey), DateTimeOffset> _timestamps = new();
+    // Ref: Observed behavior on Windows Cosmos DB Emulator — documents return in
+    //   insertion order when no ORDER BY is applied. Maintains creation-time ordering
+    //   so GetAllItemsForPartition can enumerate deterministically.
+    private readonly List<(string Id, string PartitionKey)> _insertionOrder = new();
+    private readonly object _insertionOrderLock = new();
     private readonly List<(DateTimeOffset Timestamp, string Id, string PartitionKey, string Json, bool IsDelete)> _changeFeed = new();
     private readonly object _changeFeedLock = new();
     private long _changeFeedLsnCounter;
@@ -357,6 +362,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.Clear();
         _etags.Clear();
         _timestamps.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
         lock (_changeFeedLock) { _changeFeed.Clear(); }
     }
 
@@ -402,9 +408,11 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     /// </summary>
     public string ExportState()
     {
-        var items = _items
-            .Where(kvp => !IsExpired(kvp.Key))
-            .Select(kvp => JsonParseHelpers.ParseJson(kvp.Value)).ToList();
+        List<(string Id, string PartitionKey)> orderedKeys;
+        lock (_insertionOrderLock) { orderedKeys = _insertionOrder.ToList(); }
+        var items = orderedKeys
+            .Where(key => _items.ContainsKey(key) && !IsExpired(key))
+            .Select(key => JsonParseHelpers.ParseJson(_items[key])).ToList();
         var state = new JObject { ["items"] = new JArray(items) };
         return state.ToString(Formatting.Indented);
     }
@@ -437,6 +445,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _etags[key] = importEtag;
             _timestamps[key] = DateTimeOffset.UtcNow;
             _items[key] = EnrichWithSystemProperties(itemJson, importEtag, _timestamps[key]);
+            lock (_insertionOrderLock) { _insertionOrder.Add(key); }
         }
     }
 
@@ -489,6 +498,25 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _etags.Clear();
         _timestamps.Clear();
         _itemLocks.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
+
+        // Rebuild insertion order from the change feed replay sequence.
+        // Track which keys were first created (not deleted) to preserve original insertion order.
+        var insertionOrderKeys = new List<(string Id, string PartitionKey)>();
+        foreach (var entry in feedSnapshot)
+        {
+            if (entry.IsDelete && entry.Json.Contains("\"_ttlEviction\":true", StringComparison.Ordinal))
+                continue;
+            var entryKey = (entry.Id, entry.PartitionKey);
+            if (entry.IsDelete)
+            {
+                insertionOrderKeys.Remove(entryKey);
+            }
+            else if (!insertionOrderKeys.Contains(entryKey))
+            {
+                insertionOrderKeys.Add(entryKey);
+            }
+        }
 
         foreach (var kvp in lastPerKey)
         {
@@ -499,6 +527,15 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items[key] = EnrichWithSystemProperties(kvp.Value.Json, etag, pointInTime);
             _etags[key] = etag;
             _timestamps[key] = pointInTime;
+        }
+
+        lock (_insertionOrderLock)
+        {
+            foreach (var key in insertionOrderKeys)
+            {
+                if (_items.ContainsKey(key))
+                    _insertionOrder.Add(key);
+            }
         }
     }
 
@@ -738,6 +775,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            lock (_insertionOrderLock) { _insertionOrder.Add(key); }
             var etag = GenerateETag();
             _etags[key] = etag;
             _timestamps[key] = DateTimeOffset.UtcNow;
@@ -773,6 +811,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items.TryRemove(key, out _);
                 _etags.TryRemove(key, out _);
                 _timestamps.TryRemove(key, out _);
+                lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 throw;
             }
         }
@@ -867,6 +906,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            if (!existed) { lock (_insertionOrderLock) { _insertionOrder.Add(key); } }
 
             try
             {
@@ -893,6 +933,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     _items.TryRemove(key, out _);
                     _etags.TryRemove(key, out _);
                     _timestamps.TryRemove(key, out _);
+                    lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 }
                 throw;
             }
@@ -1045,6 +1086,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items.TryRemove(key, out _);
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
+            lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
 
             TrackBatchWrite(key);
             try
@@ -1057,6 +1099,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = existingJson;
                 if (previousEtag is not null) _etags[key] = previousEtag;
                 if (previousTimestamp.HasValue) _timestamps[key] = previousTimestamp.Value;
+                lock (_insertionOrderLock) { _insertionOrder.Add(key); }
                 throw;
             }
 
@@ -1130,7 +1173,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             if (predicateParsed.Where is not null)
             {
                 var matches = EvaluateWhereExpression(predicateParsed.Where, jObj, predicateParsed.FromAlias,
-                    new Dictionary<string, object>(), null);
+                    new Dictionary<string, object>(), null, treatUndefinedAsNull: true);
                 if (!matches)
                 {
                     throw InMemoryCosmosException.Create("Precondition Failed",
@@ -1236,6 +1279,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            lock (_insertionOrderLock) { _insertionOrder.Add(key); }
             var etag = GenerateETag();
             _etags[key] = etag;
             _timestamps[key] = DateTimeOffset.UtcNow;
@@ -1252,6 +1296,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items.TryRemove(key, out _);
                 _etags.TryRemove(key, out _);
                 _timestamps.TryRemove(key, out _);
+                lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 throw;
             }
 
@@ -1360,6 +1405,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             }
 
             TrackBatchWrite(key);
+            if (!existed) { lock (_insertionOrderLock) { _insertionOrder.Add(key); } }
             try
             {
                 ExecutePostTriggers(requestOptions, JsonParseHelpers.ParseJson(enrichedJson), "Upsert");
@@ -1378,6 +1424,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     _items.TryRemove(key, out _);
                     _etags.TryRemove(key, out _);
                     _timestamps.TryRemove(key, out _);
+                    lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
                 }
                 throw;
             }
@@ -1525,6 +1572,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items.TryRemove(key, out _);
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
+            lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
 
             TrackBatchWrite(key);
             try
@@ -1537,6 +1585,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items[key] = existingJson;
                 if (previousEtag is not null) _etags[key] = previousEtag;
                 if (previousTimestamp.HasValue) _timestamps[key] = previousTimestamp.Value;
+                lock (_insertionOrderLock) { _insertionOrder.Add(key); }
                 throw;
             }
 
@@ -1614,7 +1663,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             if (predicateParsed.Where is not null)
             {
                 var matches = EvaluateWhereExpression(predicateParsed.Where, jObj, predicateParsed.FromAlias,
-                    new Dictionary<string, object>(), null);
+                    new Dictionary<string, object>(), null, treatUndefinedAsNull: true);
                 if (!matches)
                 {
                     return CreateResponseMessage(HttpStatusCode.PreconditionFailed);
@@ -2364,6 +2413,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.Clear();
         _etags.Clear();
         _timestamps.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
         lock (_changeFeedLock) { _changeFeed.Clear(); }
         _storedProcedures.Clear();
         _userDefinedFunctions.Clear();
@@ -2386,6 +2436,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.Clear();
         _etags.Clear();
         _timestamps.Clear();
+        lock (_insertionOrderLock) { _insertionOrder.Clear(); }
         lock (_changeFeedLock) { _changeFeed.Clear(); }
         _storedProcedures.Clear();
         _userDefinedFunctions.Clear();
@@ -2449,6 +2500,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
             _items.TryRemove(key, out _);
             _etags.TryRemove(key, out _);
             _timestamps.TryRemove(key, out _);
+            lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
             RecordDeleteTombstone(key.Id, pk, partitionKey);
         }
         return Task.FromResult(CreateResponseMessage(HttpStatusCode.OK));
@@ -3408,6 +3460,7 @@ internal class InMemoryContainer : Container, IContainerTestSetup
         _items.TryRemove(key, out _);
         _etags.TryRemove(key, out _);
         _timestamps.TryRemove(key, out _);
+        lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
 
         // Record a delete tombstone in the change feed so consumers see TTL evictions
         RecordDeleteTombstone(key.Id, key.PartitionKey, isTtlEviction: true);
@@ -3467,6 +3520,27 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 _items.TryRemove(key, out _);
                 _etags.TryRemove(key, out _);
                 _timestamps.TryRemove(key, out _);
+                lock (_insertionOrderLock) { _insertionOrder.Remove(key); }
+            }
+        }
+
+        // Restore insertion order for keys that were newly added during the batch
+        // but didn't exist in the snapshot — they need to be removed from insertion order.
+        // Keys that existed in the snapshot should already be in insertion order.
+        lock (_insertionOrderLock)
+        {
+            foreach (var key in touchedKeys)
+            {
+                if (!itemsSnapshot.ContainsKey(key))
+                {
+                    // Already removed above
+                }
+                else if (!_insertionOrder.Contains(key))
+                {
+                    // Item existed in snapshot but is missing from insertion order
+                    // (shouldn't normally happen, but be safe)
+                    _insertionOrder.Add(key);
+                }
             }
         }
 
@@ -4061,8 +4135,16 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     //  Private helpers — Query execution pipeline
     // ═══════════════════════════════════════════════════════════════════════════
 
+    // Ref: Observed behavior on the Windows Cosmos DB Emulator (priority 6):
+    //   Documents returned by queries without ORDER BY are in insertion order.
     private IEnumerable<string> GetAllItemsForPartition(QueryRequestOptions requestOptions)
     {
+        List<(string Id, string PartitionKey)> orderedKeys;
+        lock (_insertionOrderLock)
+        {
+            orderedKeys = _insertionOrder.ToList();
+        }
+
         if (requestOptions?.PartitionKey is not null
             && requestOptions.PartitionKey != PartitionKey.None)
         {
@@ -4076,15 +4158,19 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 if (queryComponents > 0 && queryComponents < PartitionKeyPaths.Count)
                 {
                     var prefix = pk + "|";
-                    return _items
-                        .Where(kvp => (kvp.Key.PartitionKey?.StartsWith(prefix, StringComparison.Ordinal) ?? false) && !IsExpired(kvp.Key))
-                        .Select(kvp => kvp.Value);
+                    return orderedKeys
+                        .Where(key => (key.PartitionKey?.StartsWith(prefix, StringComparison.Ordinal) ?? false) && !IsExpired(key) && _items.ContainsKey(key))
+                        .Select(key => _items[key]);
                 }
             }
 
-            return _items.Where(kvp => kvp.Key.PartitionKey == pk && !IsExpired(kvp.Key)).Select(kvp => kvp.Value);
+            return orderedKeys
+                .Where(key => key.PartitionKey == pk && !IsExpired(key) && _items.ContainsKey(key))
+                .Select(key => _items[key]);
         }
-        return _items.Where(kvp => !IsExpired(kvp.Key)).Select(kvp => kvp.Value);
+        return orderedKeys
+            .Where(key => !IsExpired(key) && _items.ContainsKey(key))
+            .Select(key => _items[key]);
     }
 
     private static int CountPartitionKeyComponents(PartitionKey partitionKey)
@@ -4609,13 +4695,13 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     if (funcName == "SUM")
                     {
                         if (values.Count > 0)
-                            resultObj[outputName] = values.Sum();
+                            resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Sum()));
                         // else: omit field entirely (undefined) — matches Cosmos DB
                     }
                     else // AVG
                     {
                         if (values.Count > 0)
-                            resultObj[outputName] = values.Average();
+                            resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Average()));
                     }
                 }
                 else if (funcName is "MIN" or "MAX" && innerArg != null)
@@ -4991,8 +5077,8 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                     }
                     return func.FunctionName switch
                     {
-                        "SUM" => values.Count > 0 ? (object)values.Sum() : UndefinedValue.Instance,
-                        "AVG" => values.Count > 0 ? (object)values.Average() : UndefinedValue.Instance,
+                        "SUM" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Sum()) : UndefinedValue.Instance,
+                        "AVG" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Average()) : UndefinedValue.Instance,
                         _ => 0.0
                     };
                 }
@@ -5328,13 +5414,13 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 if (funcName == "SUM")
                 {
                     if (values.Count > 0)
-                        resultObj[outputName] = values.Sum();
+                        resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Sum()));
                     // else: omit field entirely (undefined) — matches Cosmos DB
                 }
                 else // AVG
                 {
                     if (values.Count > 0)
-                        resultObj[outputName] = values.Average();
+                        resultObj[outputName] = JToken.FromObject(JsonParseHelpers.NormalizeNumericResult(values.Average()));
                     // else: omit field entirely (undefined)
                 }
             }
@@ -5351,6 +5437,20 @@ internal class InMemoryContainer : Container, IContainerTestSetup
                 var val = EvaluateAggregateExpression(field.SqlExpr, items, parsed.FromAlias, parameters ?? new Dictionary<string, object>());
                 if (val is not null and not UndefinedValue)
                     resultObj[outputName] = val is JToken jt ? jt.DeepClone() : JToken.FromObject(val);
+            }
+            // Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/nosql/query/select
+            //   "The SELECT clause supports arbitrary expressions including literal values."
+            // Handle non-aggregate, non-trivial expressions (literals, function calls, etc.)
+            // by evaluating the SqlExpr directly instead of treating as a property path.
+            else if (field.SqlExpr is not null and not IdentifierExpression)
+            {
+                var jObj = items.Count > 0 ? JsonParseHelpers.ParseJson(items[0]) : new JObject();
+                var val = EvaluateSqlExpression(field.SqlExpr, jObj, parsed.FromAlias,
+                    parameters ?? new Dictionary<string, object>());
+                if (val is not null and not UndefinedValue)
+                    resultObj[outputName] = val is JToken jt ? jt.DeepClone() : JToken.FromObject(val);
+                else if (val is null)
+                    resultObj[outputName] = JValue.CreateNull();
             }
             else
             {
@@ -5529,17 +5629,17 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
     private static bool EvaluateWhereExpression(
         WhereExpression expression, JObject item, string fromAlias,
-        IDictionary<string, object> parameters, JoinClause join)
+        IDictionary<string, object> parameters, JoinClause join, bool treatUndefinedAsNull = false)
     {
         return expression switch
         {
-            ComparisonCondition c => EvaluateComparison(c, item, fromAlias, parameters),
-            AndCondition a => EvaluateWhereExpression(a.Left, item, fromAlias, parameters, join)
-                              && EvaluateWhereExpression(a.Right, item, fromAlias, parameters, join),
-            OrCondition o => EvaluateWhereExpression(o.Left, item, fromAlias, parameters, join)
-                             || EvaluateWhereExpression(o.Right, item, fromAlias, parameters, join),
-            NotCondition n => !EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join)
-                              && !EvaluateWhereExpression(n.Inner, item, fromAlias, parameters, join),
+            ComparisonCondition c => EvaluateComparison(c, item, fromAlias, parameters, treatUndefinedAsNull),
+            AndCondition a => EvaluateWhereExpression(a.Left, item, fromAlias, parameters, join, treatUndefinedAsNull)
+                              && EvaluateWhereExpression(a.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
+            OrCondition o => EvaluateWhereExpression(o.Left, item, fromAlias, parameters, join, treatUndefinedAsNull)
+                             || EvaluateWhereExpression(o.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
+            NotCondition n => !EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join, treatUndefinedAsNull)
+                              && !EvaluateWhereExpression(n.Inner, item, fromAlias, parameters, join, treatUndefinedAsNull),
             FunctionCondition f => EvaluateFunction(f, item, fromAlias, parameters),
             ExistsCondition e => EvaluateExists(e, item, fromAlias, parameters, join),
             SqlExpressionCondition s => IsTruthy(EvaluateSqlExpression(s.Expression, item, fromAlias, parameters)),
@@ -5548,10 +5648,20 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     }
 
     private static bool EvaluateComparison(
-        ComparisonCondition comparison, JObject item, string fromAlias, IDictionary<string, object> parameters)
+        ComparisonCondition comparison, JObject item, string fromAlias, IDictionary<string, object> parameters,
+        bool treatUndefinedAsNull = false)
     {
         var leftValue = ResolveValue(comparison.Left, item, fromAlias, parameters);
         var rightValue = ResolveValue(comparison.Right, item, fromAlias, parameters);
+
+        // Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/partial-document-update#filter-predicate
+        //   In FilterPredicate context, missing properties are treated as null.
+        if (treatUndefinedAsNull)
+        {
+            if (leftValue is UndefinedValue) leftValue = null;
+            if (rightValue is UndefinedValue) rightValue = null;
+        }
+
         if (leftValue is UndefinedValue || rightValue is UndefinedValue)
             return false;
         return comparison.Operator switch
@@ -5573,19 +5683,19 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     /// </summary>
     private static bool EvaluateWhereExpressionIncludesUndefined(
         WhereExpression expression, JObject item, string fromAlias,
-        IDictionary<string, object> parameters, JoinClause join)
+        IDictionary<string, object> parameters, JoinClause join, bool treatUndefinedAsNull = false)
     {
         return expression switch
         {
-            ComparisonCondition c => ComparisonIncludesUndefined(c, item, fromAlias, parameters),
+            ComparisonCondition c => ComparisonIncludesUndefined(c, item, fromAlias, parameters, treatUndefinedAsNull),
             AndCondition a =>
-                EvaluateWhereExpressionIncludesUndefined(a.Left, item, fromAlias, parameters, join) ||
-                EvaluateWhereExpressionIncludesUndefined(a.Right, item, fromAlias, parameters, join),
+                EvaluateWhereExpressionIncludesUndefined(a.Left, item, fromAlias, parameters, join, treatUndefinedAsNull) ||
+                EvaluateWhereExpressionIncludesUndefined(a.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
             OrCondition o =>
-                EvaluateWhereExpressionIncludesUndefined(o.Left, item, fromAlias, parameters, join) ||
-                EvaluateWhereExpressionIncludesUndefined(o.Right, item, fromAlias, parameters, join),
+                EvaluateWhereExpressionIncludesUndefined(o.Left, item, fromAlias, parameters, join, treatUndefinedAsNull) ||
+                EvaluateWhereExpressionIncludesUndefined(o.Right, item, fromAlias, parameters, join, treatUndefinedAsNull),
             NotCondition n =>
-                EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join),
+                EvaluateWhereExpressionIncludesUndefined(n.Inner, item, fromAlias, parameters, join, treatUndefinedAsNull),
             SqlExpressionCondition s =>
                 EvaluateSqlExpression(s.Expression, item, fromAlias, parameters) is UndefinedValue,
             _ => false,
@@ -5595,12 +5705,22 @@ internal class InMemoryContainer : Container, IContainerTestSetup
     /// <summary>
     /// Checks if a comparison involves undefined semantics. For most operators, only
     /// UndefinedValue counts. For LIKE, null also produces undefined (three-value logic).
+    /// When treatUndefinedAsNull is true, undefined is treated as null (FilterPredicate context).
     /// </summary>
     private static bool ComparisonIncludesUndefined(
-        ComparisonCondition c, JObject item, string fromAlias, IDictionary<string, object> parameters)
+        ComparisonCondition c, JObject item, string fromAlias, IDictionary<string, object> parameters,
+        bool treatUndefinedAsNull = false)
     {
         var left = ResolveValue(c.Left, item, fromAlias, parameters);
         var right = ResolveValue(c.Right, item, fromAlias, parameters);
+
+        // In FilterPredicate context, undefined is treated as null — not "undefined"
+        if (treatUndefinedAsNull)
+        {
+            if (left is UndefinedValue) left = null;
+            if (right is UndefinedValue) right = null;
+        }
+
         if (left is UndefinedValue || right is UndefinedValue)
             return true;
         // LIKE with null operand(s) produces undefined per three-value logic
@@ -7886,8 +8006,8 @@ internal class InMemoryContainer : Container, IContainerTestSetup
 
         return name switch
         {
-            "SUM" => values.Count > 0 ? values.Sum(v => v.Value<double>()) : (object)UndefinedValue.Instance,
-            "AVG" => values.Count > 0 ? values.Average(v => v.Value<double>()) : (object)UndefinedValue.Instance,
+            "SUM" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Sum(v => v.Value<double>())) : (object)UndefinedValue.Instance,
+            "AVG" => values.Count > 0 ? JsonParseHelpers.NormalizeNumericResult(values.Average(v => v.Value<double>())) : (object)UndefinedValue.Instance,
             "MIN" => AggregateMinMax(values, true),
             "MAX" => AggregateMinMax(values, false),
             _ => null

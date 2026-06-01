@@ -79,6 +79,43 @@ Tests are split into two projects. When creating or moving tests, follow these r
 ### Key constraint
 The Integration project does **not** have `InternalsVisibleTo` access. If a test needs internal APIs, it belongs in Unit.
 
+## Publishing & Releases
+
+Packages are published to NuGet via the `release.yml` GitHub Actions workflow, triggered by pushing a `v*` tag. The workflow runs the full test suite before publishing — if tests fail, nothing is published.
+
+### Beta / Prerelease
+
+To publish a prerelease package for testing before merging:
+
+1. Ensure your fix is committed and pushed to a branch.
+2. Create and push a tag with a prerelease suffix:
+   ```bash
+   git tag v4.0.18-beta.1
+   git push origin v4.0.18-beta.1
+   ```
+3. The workflow extracts the version from the tag (strips the `v` prefix), passes it to `dotnet pack -p:Version=...`, and publishes to NuGet as a prerelease package.
+4. Consumers install with: `dotnet add package CosmosDB.InMemoryEmulator --version 4.0.18-beta.1`
+
+The tag can be on any branch — the workflow checks out the tagged commit.
+
+### Stable Release
+
+After merging to `main`:
+
+1. Ensure `src/Directory.Build.props` has the correct `<Version>` (e.g. `4.0.18`).
+2. Commit, create a tag, and push:
+   ```bash
+   git tag v4.0.18
+   git push origin v4.0.18
+   ```
+3. The workflow publishes stable packages and creates a GitHub Release with auto-generated release notes.
+
+### Version Conventions
+
+- `Directory.Build.props` `<Version>` is the target stable version — increment the patch after each release.
+- The CI workflow **overrides** the version from the tag, so the `.props` value doesn't need to match beta suffixes.
+- Prerelease format: `X.Y.Z-beta.N` (increment N for successive betas of the same version).
+
 ## Documentation
 
 After any changes are made that might effect the public API or functionality, documentation must be updated to reflect those changes.  The documentation should be clear and comprehensive, covering all new features, changes to existing features, and any deprecations or removals.  This includes updating README file (if relevant), but mainly the wiki which can be found in a sister folder to the main repository - ../CosmosDB.InMemoryEmulator.wiki.

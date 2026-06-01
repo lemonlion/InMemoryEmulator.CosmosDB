@@ -207,26 +207,30 @@ public class QueryPlanDeepDiveTests : IDisposable
     }
 
     [Fact]
-    public async Task QueryPlan_SingleAggregateNoGroupByNoValue_PreservedInPlan()
+    public async Task QueryPlan_SingleAggregateNoGroupByNoValue_SuppressedForLinuxCompatibility()
     {
+        // Single-aggregate bypass: aggregates are suppressed so the SDK
+        // doesn't activate AggregateQueryPipelineStage on non-Windows platforms.
         var plan = await GetQueryPlanAsync("SELECT COUNT(1) FROM c");
         var info = plan["queryInfo"]!;
 
         var aggs = info["aggregates"]!.ToObject<string[]>()!;
-        aggs.Should().Contain("Count");
+        aggs.Should().BeEmpty();
     }
 
     [Fact]
-    public async Task QueryPlan_SingleAggregateWithAlias_MappedCorrectly()
+    public async Task QueryPlan_SingleAggregateWithAlias_SuppressedForLinuxCompatibility()
     {
+        // Single-aggregate bypass: aggregates are suppressed so the SDK
+        // doesn't activate AggregateQueryPipelineStage on non-Windows platforms.
         var plan = await GetQueryPlanAsync("SELECT COUNT(1) AS cnt FROM c");
         var info = plan["queryInfo"]!;
 
         var aggs = info["aggregates"]!.ToObject<string[]>()!;
-        aggs.Should().Contain("Count");
+        aggs.Should().BeEmpty();
 
-        var aliasMap = info["groupByAliasToAggregateType"]!;
-        aliasMap["cnt"]!.ToString().Should().Be("Count");
+        var aliasMap = (JObject)info["groupByAliasToAggregateType"]!;
+        aliasMap.Should().BeEmpty();
     }
 
     [Fact]

@@ -594,6 +594,116 @@ public class PatchFilterPredicateEdgeTests
 }
 
 
+// ── Category K2: FilterPredicate Missing Property = null (Issue #70) ─────────
+
+/// <summary>
+/// Regression tests for Issue #70: FilterPredicate should treat missing properties as null.
+/// Uses InMemoryContainer directly with raw JSON streams to control property presence.
+///
+/// Ref: https://learn.microsoft.com/en-us/azure/cosmos-db/partial-document-update#filter-predicate
+///   "The filter predicate is evaluated against the existing state of the document."
+///   Missing properties are semantically equivalent to null in filter predicate evaluation.
+/// </summary>
+public class PatchFilterPredicateMissingPropertyTests
+{
+    [Fact]
+    public async Task Patch_FilterPredicate_MissingPropertyEqualsNull_Succeeds()
+    {
+        var container = new InMemoryContainer("test", "/partitionKey");
+        // Document without linkedId property at all
+        await container.CreateItemStreamAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(
+                """{"id":"1","partitionKey":"pk1","name":"test"}""")),
+            new PartitionKey("pk1"));
+
+        var result = await container.PatchItemAsync<JObject>(
+            "1", new PartitionKey("pk1"),
+            [PatchOperation.Set("/linkedId", "new-value")],
+            new PatchItemRequestOptions { FilterPredicate = "FROM c WHERE c.linkedId = null" });
+
+        result.Resource["linkedId"]!.Value<string>().Should().Be("new-value");
+    }
+
+    [Fact]
+    public async Task Patch_FilterPredicate_MissingPropertyNotEqualNull_ThrowsPreconditionFailed()
+    {
+        var container = new InMemoryContainer("test", "/partitionKey");
+        // Document without linkedId property at all
+        await container.CreateItemStreamAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(
+                """{"id":"1","partitionKey":"pk1","name":"test"}""")),
+            new PartitionKey("pk1"));
+
+        var act = () => container.PatchItemAsync<JObject>(
+            "1", new PartitionKey("pk1"),
+            [PatchOperation.Set("/name", "updated")],
+            new PatchItemRequestOptions { FilterPredicate = "FROM c WHERE c.linkedId != null" });
+
+        await act.Should().ThrowAsync<CosmosException>()
+            .Where(e => e.StatusCode == HttpStatusCode.PreconditionFailed);
+    }
+
+    [Fact]
+    public async Task Patch_FilterPredicate_MissingPropertyEqualsString_ThrowsPreconditionFailed()
+    {
+        var container = new InMemoryContainer("test", "/partitionKey");
+        // Document without linkedId property at all
+        await container.CreateItemStreamAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(
+                """{"id":"1","partitionKey":"pk1","name":"test"}""")),
+            new PartitionKey("pk1"));
+
+        // undefined treated as null — null ≠ 'some-value'
+        var act = () => container.PatchItemAsync<JObject>(
+            "1", new PartitionKey("pk1"),
+            [PatchOperation.Set("/name", "updated")],
+            new PatchItemRequestOptions { FilterPredicate = "FROM c WHERE c.linkedId = 'some-value'" });
+
+        await act.Should().ThrowAsync<CosmosException>()
+            .Where(e => e.StatusCode == HttpStatusCode.PreconditionFailed);
+    }
+
+    [Fact]
+    public async Task Patch_FilterPredicate_ExplicitNullEqualsNull_Succeeds()
+    {
+        var container = new InMemoryContainer("test", "/partitionKey");
+        // Document WITH explicit null for linkedId
+        await container.CreateItemStreamAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(
+                """{"id":"1","partitionKey":"pk1","linkedId":null,"name":"test"}""")),
+            new PartitionKey("pk1"));
+
+        var result = await container.PatchItemAsync<JObject>(
+            "1", new PartitionKey("pk1"),
+            [PatchOperation.Set("/linkedId", "new-value")],
+            new PatchItemRequestOptions { FilterPredicate = "FROM c WHERE c.linkedId = null" });
+
+        result.Resource["linkedId"]!.Value<string>().Should().Be("new-value");
+    }
+
+    [Fact]
+    public async Task Patch_FilterPredicate_MissingPropertyWithAndCondition_Succeeds()
+    {
+        var container = new InMemoryContainer("test", "/partitionKey");
+        // Document without linkedId but with name
+        await container.CreateItemStreamAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes(
+                """{"id":"1","partitionKey":"pk1","name":"test"}""")),
+            new PartitionKey("pk1"));
+
+        var result = await container.PatchItemAsync<JObject>(
+            "1", new PartitionKey("pk1"),
+            [PatchOperation.Set("/linkedId", "new-value")],
+            new PatchItemRequestOptions
+            {
+                FilterPredicate = "FROM c WHERE c.linkedId = null AND c.name = 'test'"
+            });
+
+        result.Resource["linkedId"]!.Value<string>().Should().Be("new-value");
+    }
+}
+
+
 // ── Category L: FakeCosmosHandler Patch Bugs ─────────────────────────────────
 
 public class FakeCosmosHandlerPatchBugTests

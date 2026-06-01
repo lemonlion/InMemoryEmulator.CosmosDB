@@ -1161,7 +1161,7 @@ public class UdfGapTests
     [Fact]
     public async Task Udf_RegisterAndUseInQuery()
     {
-        _container.RegisterUdf("double", args => ((double)args[0]) * 2);
+        _container.RegisterUdf("double", args => Convert.ToDouble(args[0]) * 2);
 
         await _container.CreateItemAsync(
             new UdfDocument { Id = "1", PartitionKey = "pk1", Value = 21 },
@@ -1183,7 +1183,7 @@ public class UdfGapTests
     [Fact]
     public async Task Udf_MultipleArgs()
     {
-        _container.RegisterUdf("add", args => (double)args[0] + (double)args[1]);
+        _container.RegisterUdf("add", args => Convert.ToDouble(args[0]) + Convert.ToDouble(args[1]));
 
         await _container.CreateItemAsync(
             new UdfDocument { Id = "1", PartitionKey = "pk1", X = 10, Y = 20 },
@@ -1227,7 +1227,7 @@ public class UdfGapTests
     [Fact]
     public async Task DeregisterUdf_RemovesHandler()
     {
-        _container.RegisterUdf("removable", args => (double)args[0] * 10);
+        _container.RegisterUdf("removable", args => Convert.ToDouble(args[0]) * 10);
 
         await _container.CreateItemAsync(
             new UdfDocument { Id = "1", PartitionKey = "pk1", Value = 5 },
@@ -1315,7 +1315,7 @@ public class UdfGapTests
     [Fact]
     public async Task Udf_InWhereClause_FiltersCorrectly()
     {
-        _container.RegisterUdf("isEven", args => ((double)args[0]) % 2 == 0);
+        _container.RegisterUdf("isEven", args => Convert.ToDouble(args[0]) % 2 == 0);
 
         await _container.CreateItemAsync(
             new UdfDocument { Id = "1", PartitionKey = "pk1", Value = 2 }, new PartitionKey("pk1"));
