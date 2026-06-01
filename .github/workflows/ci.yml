@@ -15,3 +15,42 @@ jobs:
 
   windows-parity:
     uses: ./.github/workflows/_windows-parity.yml
+
+  version-preview:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check for source changes
+        id: changes
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^src/|^[^/]+\.props$|^nuget-version\.yaml$'; then
+            echo "has_source_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_source_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute version preview
+        if: steps.changes.outputs.has_source_changes == 'true'
+        id: version
+        uses: ./.github/actions/compute-nuget-version
+        with:
+          branch: ${{ github.head_ref }}
+
+      - name: Write version preview summary
+        if: steps.changes.outputs.has_source_changes == 'true'
+        run: |
+          {
+            echo "## 📦 Version Preview"
+            echo ""
+            echo "| | Version |"
+            echo "|---|---|"
+            echo "| This PR (beta) | \`${{ steps.version.outputs.beta-version }}\` |"
+            echo "| Next stable release | \`${{ steps.version.outputs.stable-version }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

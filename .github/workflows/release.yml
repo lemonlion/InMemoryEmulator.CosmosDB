@@ -1,10 +1,63 @@
 name: Release
 
 on:
-  push:
-    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        type: boolean
+        description: Publish as prerelease (beta)
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  compute-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.compute.outputs.VERSION }}
+      prerelease: ${{ steps.compute.outputs.PRERELEASE }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: version
+        uses: ./.github/actions/compute-nuget-version
+        with:
+          branch: ${{ github.ref_name }}
+
+      - name: Warn if no source changes since last release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LAST_PATCH="${{ steps.version.outputs.last-patch }}"
+          MAJOR=$(grep -E '^major:' nuget-version.yaml | awk '{print $2}')
+          MINOR=$(grep -E '^minor:' nuget-version.yaml | awk '{print $2}')
+          if [[ "$LAST_PATCH" -ge 0 ]]; then
+            LAST_TAG="v${MAJOR}.${MINOR}.${LAST_PATCH}"
+            if ! git diff --name-only "${LAST_TAG}" HEAD | grep -qE '^src/|^[^/]+\.props$|^nuget-version\.yaml$'; then
+              echo "::warning::No source code changes found since ${LAST_TAG}. A version bump may not be needed."
+            fi
+          fi
+
+      - name: Pick version
+        id: compute
+        run: |
+          if [[ "${{ inputs.prerelease }}" == "true" || "${{ github.ref_name }}" != "main" ]]; then
+            VERSION="${{ steps.version.outputs.beta-version }}"
+            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
+          else
+            VERSION="${{ steps.version.outputs.stable-version }}"
+            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "📦 Publishing version: **${VERSION}**" >> "$GITHUB_STEP_SUMMARY"
+
   test:
     uses: ./.github/workflows/_build-and-test.yml
 
@@ -12,33 +65,21 @@ jobs:
     uses: ./.github/workflows/_windows-parity.yml
 
   release:
-    needs: [test, windows-parity]
+    needs: [compute-version, test, windows-parity]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-dotnet-build
         with:
           build: false
 
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
-          if [[ "$VERSION" == *-* ]]; then
-            echo "PRERELEASE=true" >> $GITHUB_OUTPUT
-          else
-            echo "PRERELEASE=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Build
-        run: dotnet build CosmosDB.InMemoryEmulator.sln --configuration Release -p:Version=${{ steps.version.outputs.VERSION }}
+        run: dotnet build CosmosDB.InMemoryEmulator.sln --configuration Release -p:Version=${{ needs.compute-version.outputs.version }}
 
       - name: Pack
-        run: dotnet pack CosmosDB.InMemoryEmulator.sln --configuration Release --no-build --output ./nupkgs -p:Version=${{ steps.version.outputs.VERSION }}
+        run: dotnet pack CosmosDB.InMemoryEmulator.sln --configuration Release --no-build --output ./nupkgs -p:Version=${{ needs.compute-version.outputs.version }}
 
       - name: Push to NuGet
         run: dotnet nuget push ./nupkgs/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
@@ -46,9 +87,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.compute-version.outputs.version }}
           generate_release_notes: true
-          prerelease: ${{ steps.version.outputs.PRERELEASE == 'true' }}
-          make_latest: ${{ steps.version.outputs.PRERELEASE != 'true' }}
+          prerelease: ${{ needs.compute-version.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.compute-version.outputs.prerelease != 'true' }}
           files: |
             ./nupkgs/*.nupkg
             ./nupkgs/*.snupkg
