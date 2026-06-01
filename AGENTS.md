@@ -53,9 +53,12 @@ Every piece of behavioral logic in the source code — status codes, validation 
 
 ## Versioning & Release
 
-- After every session of bug fixes is complete and the full test suite has passed, increment the patch version in `src/Directory.Build.props` (the single `<Version>` property shared by all three packages).
-- **On `main`:** Commit, create a git tag (`v{version}`), and push both the commit and the tag to origin.
-- **On any other branch:** Commit and push the code changes and version bump only. Do not create or push a tag.
+Version numbers are computed automatically from `nuget-version.yaml` at the repo root and the existing GitHub release history — **no manual version edits are needed for patch releases**.
+
+- `nuget-version.yaml` contains only `major` and `minor`. The patch is auto-incremented from the latest stable GitHub release for that `major.minor` pair each time a release is triggered.
+- For a **major or minor bump**, edit `nuget-version.yaml` and merge to `main` before triggering the next release.
+- **Do not** edit `<Version>` in `src/Directory.Build.props` — it produces `0.0.0-local` for local builds, which is correct. The CI/release workflows always pass `-p:Version=X.Y.Z` at build time.
+- After bug-fix sessions: **no version file changes are needed** — just commit and push your code changes.
 
 ## Test Classification Rules
 
@@ -81,40 +84,31 @@ The Integration project does **not** have `InternalsVisibleTo` access. If a test
 
 ## Publishing & Releases
 
-Packages are published to NuGet via the `release.yml` GitHub Actions workflow, triggered by pushing a `v*` tag. The workflow runs the full test suite before publishing — if tests fail, nothing is published.
+Releases are published manually via the **Actions → Release** workflow (`workflow_dispatch`). The full test suite runs before anything is published. Releases are serialised — if two releases are triggered simultaneously, the second queues behind the first.
 
-### Beta / Prerelease
+### PR Version Preview
 
-To publish a prerelease package for testing before merging:
+When a PR changes files in `src/`, `*.props`, or `nuget-version.yaml`, the CI `version-preview` job shows in the workflow step summary what the next beta and stable versions would be if published from that branch.
 
-1. Ensure your fix is committed and pushed to a branch.
-2. Create and push a tag with a prerelease suffix:
-   ```bash
-   git tag v4.0.18-beta.1
-   git push origin v4.0.18-beta.1
-   ```
-3. The workflow extracts the version from the tag (strips the `v` prefix), passes it to `dotnet pack -p:Version=...`, and publishes to NuGet as a prerelease package.
-4. Consumers install with: `dotnet add package CosmosDB.InMemoryEmulator --version 4.0.18-beta.1`
+### Stable Release (from `main`)
 
-The tag can be on any branch — the workflow checks out the tagged commit.
+1. Merge all desired changes to `main`. Update `CHANGELOG.md` if appropriate.
+2. Go to **Actions → Release** and trigger the workflow from `main` with **Prerelease: unchecked** (the default).
+3. The workflow auto-computes the next patch version, runs all tests, publishes to NuGet.org, and creates a GitHub Release with auto-generated notes.
 
-### Stable Release
+### Prerelease / Beta (from any branch)
 
-After merging to `main`:
-
-1. Ensure `src/Directory.Build.props` has the correct `<Version>` (e.g. `4.0.18`).
-2. Commit, create a tag, and push:
-   ```bash
-   git tag v4.0.18
-   git push origin v4.0.18
-   ```
-3. The workflow publishes stable packages and creates a GitHub Release with auto-generated release notes.
+1. Push your branch.
+2. Go to **Actions → Release**, select your branch from the branch dropdown, and trigger with **Prerelease: checked** (beta is also automatic when triggering from any non-`main` branch).
+3. The computed version will be `X.Y.Z-beta.N.sanitised-branch-name`, where N auto-increments.
+4. Consumers install with: `dotnet add package CosmosDB.InMemoryEmulator --version X.Y.Z-beta.N.branch-name`
 
 ### Version Conventions
 
-- `Directory.Build.props` `<Version>` is the target stable version — increment the patch after each release.
-- The CI workflow **overrides** the version from the tag, so the `.props` value doesn't need to match beta suffixes.
-- Prerelease format: `X.Y.Z-beta.N` (increment N for successive betas of the same version).
+- Patch auto-increments: the release workflow queries the highest existing `vX.Y.*` GitHub release tag and adds 1.
+- Beta format: `X.Y.Z-beta.N.sanitised-branch-name`
+- Stable format: `X.Y.Z`
+- To bump major or minor: edit `nuget-version.yaml` (`major`/`minor` fields) and merge to `main` before the next release.
 
 ## Documentation
 

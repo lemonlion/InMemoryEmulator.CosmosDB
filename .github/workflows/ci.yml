@@ -15,3 +15,56 @@ jobs:
 
   windows-parity:
     uses: ./.github/workflows/_windows-parity.yml
+
+  version-preview:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check for source changes
+        id: changes
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^src/|^[^/]+\.props$|^nuget-version\.yaml$'; then
+            echo "has_source_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_source_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute beta version preview
+        if: steps.changes.outputs.has_source_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MAJOR=$(grep -E '^major:' nuget-version.yaml | awk '{print $2}')
+          MINOR=$(grep -E '^minor:' nuget-version.yaml | awk '{print $2}')
+
+          LAST_PATCH=$(gh release list --exclude-drafts --limit 200 --json tagName \
+            --jq "[.[] | select(.tagName | test(\"^v${MAJOR}\\.${MINOR}\\.[0-9]+$\")) | .tagName | ltrimstr(\"v\") | split(\".\")[2] | tonumber] | max // -1")
+          LAST_PATCH=${LAST_PATCH:--1}
+          NEXT_PATCH=$((LAST_PATCH + 1))
+
+          BRANCH="${{ github.head_ref }}"
+          SAFE_BRANCH=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+
+          LAST_BETA=$(gh release list --exclude-drafts --limit 200 --json tagName \
+            --jq "[.[] | select(.tagName | test(\"^v${MAJOR}\\.${MINOR}\\.${NEXT_PATCH}-beta\\.[0-9]+\\.${SAFE_BRANCH}$\")) | .tagName | capture(\"beta\\.(?<n>[0-9]+)\") | .n | tonumber] | max // 0" 2>/dev/null)
+          LAST_BETA=${LAST_BETA:-0}
+          NEXT_BETA=$((LAST_BETA + 1))
+
+          BETA_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-beta.${NEXT_BETA}.${SAFE_BRANCH}"
+          STABLE_VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
+
+          {
+            echo "## 📦 Version Preview"
+            echo ""
+            echo "| | Version |"
+            echo "|---|---|"
+            echo "| This PR (beta) | \`${BETA_VERSION}\` |"
+            echo "| Next stable release | \`${STABLE_VERSION}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
