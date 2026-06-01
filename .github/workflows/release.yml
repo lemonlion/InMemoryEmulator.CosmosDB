@@ -26,20 +26,18 @@ jobs:
           fetch-depth: 0
 
       - name: Compute version
-        id: compute
+        id: version
+        uses: ./.github/actions/compute-nuget-version
+        with:
+          branch: ${{ github.ref_name }}
+
+      - name: Warn if no source changes since last release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          LAST_PATCH="${{ steps.version.outputs.last-patch }}"
           MAJOR=$(grep -E '^major:' nuget-version.yaml | awk '{print $2}')
           MINOR=$(grep -E '^minor:' nuget-version.yaml | awk '{print $2}')
-          BRANCH="${GITHUB_REF_NAME}"
-
-          LAST_PATCH=$(gh release list --exclude-drafts --limit 200 --json tagName \
-            --jq "[.[] | select(.tagName | test(\"^v${MAJOR}\\.${MINOR}\\.[0-9]+$\")) | .tagName | ltrimstr(\"v\") | split(\".\")[2] | tonumber] | max // -1")
-          LAST_PATCH=${LAST_PATCH:--1}
-          NEXT_PATCH=$((LAST_PATCH + 1))
-
-          # Warn if no source changes since the last stable release
           if [[ "$LAST_PATCH" -ge 0 ]]; then
             LAST_TAG="v${MAJOR}.${MINOR}.${LAST_PATCH}"
             if ! git diff --name-only "${LAST_TAG}" HEAD | grep -qE '^src/|^[^/]+\.props$|^nuget-version\.yaml$'; then
@@ -47,23 +45,17 @@ jobs:
             fi
           fi
 
-          if [[ "${{ inputs.prerelease }}" == "true" || "$BRANCH" != "main" ]]; then
-            SAFE_BRANCH=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
-
-            LAST_BETA=$(gh release list --exclude-drafts --limit 200 --json tagName \
-              --jq "[.[] | select(.tagName | test(\"^v${MAJOR}\\.${MINOR}\\.${NEXT_PATCH}-beta\\.[0-9]+\\.${SAFE_BRANCH}$\")) | .tagName | capture(\"beta\\.(?<n>[0-9]+)\") | .n | tonumber] | max // 0" 2>/dev/null)
-            LAST_BETA=${LAST_BETA:-0}
-            NEXT_BETA=$((LAST_BETA + 1))
-
-            VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}-beta.${NEXT_BETA}.${SAFE_BRANCH}"
-            PRERELEASE=true
+      - name: Pick version
+        id: compute
+        run: |
+          if [[ "${{ inputs.prerelease }}" == "true" || "${{ github.ref_name }}" != "main" ]]; then
+            VERSION="${{ steps.version.outputs.beta-version }}"
+            echo "PRERELEASE=true" >> "$GITHUB_OUTPUT"
           else
-            VERSION="${MAJOR}.${MINOR}.${NEXT_PATCH}"
-            PRERELEASE=false
+            VERSION="${{ steps.version.outputs.stable-version }}"
+            echo "PRERELEASE=false" >> "$GITHUB_OUTPUT"
           fi
-
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "PRERELEASE=${PRERELEASE}" >> "$GITHUB_OUTPUT"
           echo "📦 Publishing version: **${VERSION}**" >> "$GITHUB_STEP_SUMMARY"
 
   test:

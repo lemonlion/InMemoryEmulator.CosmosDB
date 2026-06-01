@@ -1,0 +1,47 @@
+name: Compute NuGet Version
+description: Computes the next NuGet package version from release history and nuget-version.yaml
+
+inputs:
+  branch:
+    description: The branch name (e.g. main, feature/foo)
+    required: true
+
+outputs:
+  stable-version:
+    description: The next stable version (e.g. 4.0.21)
+    value: ${{ steps.compute.outputs.stable_version }}
+  beta-version:
+    description: The next beta version (e.g. 4.0.21-beta.1.branch-name)
+    value: ${{ steps.compute.outputs.beta_version }}
+  last-patch:
+    description: The last published patch number (-1 if no releases exist for this major.minor)
+    value: ${{ steps.compute.outputs.last_patch }}
+
+runs:
+  using: composite
+  steps:
+    - name: Compute version
+      id: compute
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        MAJOR=$(grep -E '^major:' nuget-version.yaml | awk '{print $2}')
+        MINOR=$(grep -E '^minor:' nuget-version.yaml | awk '{print $2}')
+
+        LAST_PATCH=$(gh release list --exclude-drafts --limit 200 --json tagName \
+          --jq "[.[] | select(.tagName | test(\"^v${MAJOR}\\.${MINOR}\\.[0-9]+$\")) | .tagName | ltrimstr(\"v\") | split(\".\")[2] | tonumber] | max // -1")
+        LAST_PATCH=${LAST_PATCH:--1}
+        NEXT_PATCH=$((LAST_PATCH + 1))
+
+        BRANCH="${{ inputs.branch }}"
+        SAFE_BRANCH=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+
+        LAST_BETA=$(gh release list --exclude-drafts --limit 200 --json tagName \
+          --jq "[.[] | select(.tagName | test(\"^v${MAJOR}\\.${MINOR}\\.${NEXT_PATCH}-beta\\.[0-9]+\\.${SAFE_BRANCH}$\")) | .tagName | capture(\"beta\\.(?<n>[0-9]+)\") | .n | tonumber] | max // 0" 2>/dev/null)
+        LAST_BETA=${LAST_BETA:-0}
+        NEXT_BETA=$((LAST_BETA + 1))
+
+        echo "stable_version=${MAJOR}.${MINOR}.${NEXT_PATCH}" >> "$GITHUB_OUTPUT"
+        echo "beta_version=${MAJOR}.${MINOR}.${NEXT_PATCH}-beta.${NEXT_BETA}.${SAFE_BRANCH}" >> "$GITHUB_OUTPUT"
+        echo "last_patch=${LAST_PATCH}" >> "$GITHUB_OUTPUT"
